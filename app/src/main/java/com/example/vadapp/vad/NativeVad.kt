@@ -21,6 +21,8 @@ class AnalysisResult(
     val sourceSampleRate: Int,
     val sourceChannels: Int,
     val mime: String,
+    /** Runtime that executed the model: "ONNX" or "TFLite". */
+    val format: String,
     val elapsedMs: Long,
 )
 
@@ -38,11 +40,16 @@ object NativeVad {
     /**
      * Decodes the first audio track behind [fd] (any container/codec/sample rate/channel
      * count the device supports), converts it to 16 kHz mono and runs [modelType] on it.
+     *
+     * [modelPath] / [extraPath] are "asset:<path>" or absolute file paths. The runtime
+     * (ONNX Runtime or TFLite) is picked from the model file's content, not its name.
      * Throws RuntimeException on failure and CancellationException when [listener] returns false.
      */
     external fun analyze(
         assets: AssetManager,
         modelType: Int,
+        modelPath: String,
+        extraPath: String?,
         fd: Int,
         offset: Long,
         length: Long,

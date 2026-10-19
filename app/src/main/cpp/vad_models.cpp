@@ -1,34 +1,22 @@
 #include "vad_models.h"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstring>
 
 namespace vad {
-namespace {
 
-Ort::SessionOptions MakeOptions(int num_threads) {
-    Ort::SessionOptions opts;
-    opts.SetIntraOpNumThreads(std::max(1, num_threads));
-    opts.SetInterOpNumThreads(1);
-    opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-    return opts;
-}
-
-}  // namespace
-
-std::unique_ptr<VadModel> VadModel::Create(ModelType type, Ort::Env& env,
-                                           const std::vector<ModelBlob>& blobs,
-                                           int num_threads) {
+std::unique_ptr<VadModel> VadModel::Create(ModelType type, std::vector<uint8_t> model,
+                                           const std::vector<uint8_t>& extra, int num_threads) {
     switch (type) {
         case ModelType::kFireRedVad:
-            if (blobs.size() < 2) throw VadError("FireRedVAD needs model + cmvn");
-            return std::make_unique<FireRedVadModel>(env, blobs[0], blobs[1], num_threads);
+            if (extra.empty()) throw VadError("FireRedVAD needs cmvn.ark");
+            return std::make_unique<FireRedVadModel>(CreateSession(std::move(model), num_threads), extra);
         case ModelType::kSilero:
-            return std::make_unique<SileroVadModel>(env, blobs.at(0));
+            // The model is tiny and strictly sequential: one thread is fastest.
+            return std::make_unique<SileroVadModel>(CreateSession(std::move(model), 1));
         case ModelType::kYamnet:
-            return std::make_unique<YamnetModel>(env, blobs.at(0), num_threads);
+            return std::make_unique<YamnetModel>(CreateSession(std::move(model), num_threads));
     }
     throw VadError("Unknown model type");
 }
@@ -87,9 +75,8 @@ Cmvn ParseKaldiCmvn(const void* data, size_t size) {
 
 // ---------------------------------------------------------------- FireRedVAD
 
-FireRedVadModel::FireRedVadModel(Ort::Env& env, ModelBlob onnx, ModelBlob cmvn, int num_threads)
-    : session_(env, onnx.data, onnx.size, MakeOptions(num_threads)),
-      cmvn_(ParseKaldiCmvn(cmvn.data, cmvn.size)) {
+FireRedVadModel::FireRedVadModel(std::unique_ptr<InferenceSession> s, const std::vector<uint8_t>& cmvn)
+    : VadModel(std::move(s)), cmvn_(ParseKaldiCmvn(cmvn.data(), cmvn.size())) {
     if (static_cast<int>(cmvn_.mean.size()) != Fbank::kNumBins) throw VadError("cmvn dim mismatch");
     track_.hop_s = 0.010f;
     track_.offset_s = 0.0125f;  // centre of the 25 ms analysis window
@@ -114,16 +101,12 @@ void FireRedVadModel::RunFrames(int num_frames) {
     fbank_.Compute(pending_.data(), num_frames, feat_.data());
     cmvn_.Apply(feat_.data(), num_frames);
 
-    auto mem = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-    const std::array<int64_t, 3> shape{1, num_frames, Fbank::kNumBins};
-    Ort::Value input = Ort::Value::CreateTensor<float>(mem, feat_.data(), feat_.size(),
-                                                       shape.data(), shape.size());
-    const char* in_names[] = {"feat"};
-    const char* out_names[] = {"probs"};
-    auto out = session_.Run(Ort::RunOptions{nullptr}, in_names, &input, 1, out_names, 1);
-    const float* probs = out[0].GetTensorData<float>();
-    const size_t count = out[0].GetTensorTypeAndShapeInfo().GetElementCount();
-    track_.probs.insert(track_.probs.end(), probs, probs + count);
+    auto out = session_->Run({{"feat", DType::kFloat32, {1, num_frames, Fbank::kNumBins}, feat_.data()}},
+                             {"probs"});
+    // Some converters pad the time axis; keep exactly one probability per frame.
+    const auto& probs = out[0].data;
+    track_.probs.insert(track_.probs.end(), probs.begin(),
+                        probs.begin() + std::min<size_t>(probs.size(), num_frames));
 
     // The next chunk starts exactly where this chunk's next frame would have started.
     const size_t consumed = static_cast<size_t>(num_frames) * Fbank::kFrameShift;
@@ -132,9 +115,9 @@ void FireRedVadModel::RunFrames(int num_frames) {
 
 // ---------------------------------------------------------------- Silero
 
-SileroVadModel::SileroVadModel(Ort::Env& env, ModelBlob onnx)
-    // The model is tiny and strictly sequential: one thread is fastest.
-    : session_(env, onnx.data, onnx.size, MakeOptions(1)),
+SileroVadModel::SileroVadModel(std::unique_ptr<InferenceSession> s)
+    : VadModel(std::move(s)),
+      has_sr_(session_->HasInput("sr")),
       input_(kContext + kWindow, 0.0f),
       state_(2 * 1 * 128, 0.0f) {
     track_.hop_s = static_cast<float>(kWindow) / kTargetSampleRate;
@@ -160,17 +143,15 @@ void SileroVadModel::Finish() {
 }
 
 void SileroVadModel::RunWindow() {
-    const std::array<int64_t, 2> in_shape{1, kContext + kWindow};
-    const std::array<int64_t, 3> st_shape{2, 1, 128};
-    std::array<Ort::Value, 3> inputs{
-            Ort::Value::CreateTensor<float>(mem_, input_.data(), input_.size(), in_shape.data(), 2),
-            Ort::Value::CreateTensor<float>(mem_, state_.data(), state_.size(), st_shape.data(), 3),
-            Ort::Value::CreateTensor<int64_t>(mem_, &sr_, 1, nullptr, 0)};
-    const char* in_names[] = {"input", "state", "sr"};
-    const char* out_names[] = {"output", "stateN"};
-    auto out = session_.Run(Ort::RunOptions{nullptr}, in_names, inputs.data(), 3, out_names, 2);
-    track_.probs.push_back(out[0].GetTensorData<float>()[0]);
-    std::memcpy(state_.data(), out[1].GetTensorData<float>(), state_.size() * sizeof(float));
+    std::vector<InputTensor> inputs{
+            {"input", DType::kFloat32, {1, kContext + kWindow}, input_.data()},
+            {"state", DType::kFloat32, {2, 1, 128}, state_.data()}};
+    // The stock graph takes the sample rate; the TFLite export has it folded in.
+    if (has_sr_) inputs.push_back({"sr", DType::kInt64, {}, &sr_});
+    auto out = session_->Run(inputs, {"output", "stateN"});
+    track_.probs.push_back(out[0].data.at(0));
+    if (out[1].data.size() != state_.size()) throw VadError("Silero: unexpected state size");
+    std::memcpy(state_.data(), out[1].data.data(), state_.size() * sizeof(float));
     // The last 64 samples of this window become the context of the next one.
     std::memmove(input_.data(), input_.data() + kWindow, kContext * sizeof(float));
     filled_ = 0;
@@ -178,8 +159,9 @@ void SileroVadModel::RunWindow() {
 
 // ---------------------------------------------------------------- YAMNet
 
-YamnetModel::YamnetModel(Ort::Env& env, ModelBlob onnx, int num_threads)
-    : session_(env, onnx.data, onnx.size, MakeOptions(num_threads)) {
+YamnetModel::YamnetModel(std::unique_ptr<InferenceSession> s) : VadModel(std::move(s)) {
+    const auto shape = session_->InputShape(0);
+    if (shape.size() == 1 && shape[0] > 0) fixed_len_ = static_cast<size_t>(shape[0]);
     track_.hop_s = static_cast<float>(kHop) / kTargetSampleRate;
     track_.offset_s = static_cast<float>(kPatch) / 2 / kTargetSampleRate;
 }
@@ -187,37 +169,72 @@ YamnetModel::YamnetModel(Ort::Env& env, ModelBlob onnx, int num_threads)
 void YamnetModel::Feed(const float* samples, size_t n) {
     pending_.insert(pending_.end(), samples, samples + n);
     total_samples_ += n;
+    if (fixed_len_ > 0) {
+        // Patch k covers samples [k * hop, k * hop + fixed_len).
+        while (pending_start_ + pending_.size() >= next_frame_ * kHop + fixed_len_) {
+            RunFixed(pending_.data() + (next_frame_ * kHop - pending_start_));
+            ++next_frame_;
+        }
+        const size_t drop = std::min(pending_.size(), next_frame_ * kHop - pending_start_);
+        pending_.erase(pending_.begin(), pending_.begin() + drop);
+        pending_start_ += drop;
+        return;
+    }
     constexpr size_t run_len = kPatch + static_cast<size_t>(kHop) * (kFramesPerRun - 1);
-    while (pending_.size() >= run_len) Run(run_len);
+    while (pending_.size() >= run_len) RunDynamic(run_len);
 }
 
 void YamnetModel::Finish() {
+    if (fixed_len_ > 0) {
+        // Emit the same number of patches as the whole-waveform graph would
+        // (1 + ceil((N - 0.96 s) / 0.48 s)), zero-padding the tail.
+        const size_t target = total_samples_ <= static_cast<size_t>(kPatch)
+                ? 1 : 1 + (total_samples_ - kPatch + kHop - 1) / kHop;
+        std::vector<float> window(fixed_len_);
+        while (next_frame_ < target) {
+            std::fill(window.begin(), window.end(), 0.0f);
+            const size_t start = next_frame_ * kHop - pending_start_;
+            if (start < pending_.size()) {
+                const size_t n = std::min(fixed_len_, pending_.size() - start);
+                std::copy_n(pending_.begin() + start, n, window.begin());
+            }
+            RunFixed(window.data());
+            ++next_frame_;
+        }
+        pending_.clear();
+        return;
+    }
     // Leftover audio that is not yet covered by any emitted patch. The graph zero-pads
     // short input to one full patch; skip a sliver that the previous patch already overlaps.
     const bool nothing_yet = track_.probs.empty();
     if (!pending_.empty() && (nothing_yet || pending_.size() > kPatch - kHop)) {
-        Run(pending_.size());
+        RunDynamic(pending_.size());
     }
     pending_.clear();
 }
 
-void YamnetModel::Run(size_t num_samples) {
-    const std::array<int64_t, 1> shape{static_cast<int64_t>(num_samples)};
-    Ort::Value input = Ort::Value::CreateTensor<float>(mem_, pending_.data(), num_samples,
-                                                       shape.data(), 1);
-    const char* in_names[] = {"waveform"};
-    const char* out_names[] = {"output_0"};
-    auto out = session_.Run(Ort::RunOptions{nullptr}, in_names, &input, 1, out_names, 1);
-    const float* scores = out[0].GetTensorData<float>();
-    const auto dims = out[0].GetTensorTypeAndShapeInfo().GetShape();
-    const int64_t frames = dims.at(0);
-    for (int64_t f = 0; f < frames; ++f) {
-        const float* row = scores + f * kNumClasses;
+void YamnetModel::RunFixed(const float* window) {
+    auto out = session_->Run({{"waveform", DType::kFloat32, {static_cast<int64_t>(fixed_len_)}, window}},
+                             {"output_0"});
+    AppendScores(out[0]);
+}
+
+void YamnetModel::RunDynamic(size_t num_samples) {
+    auto out = session_->Run({{"waveform", DType::kFloat32, {static_cast<int64_t>(num_samples)}, pending_.data()}},
+                             {"output_0"});
+    const size_t frames = out[0].data.size() / kNumClasses;
+    AppendScores(out[0]);
+    const size_t consumed = std::min(num_samples, frames * kHop);
+    pending_.erase(pending_.begin(), pending_.begin() + consumed);
+}
+
+void YamnetModel::AppendScores(const OutputTensor& scores) {
+    if (scores.data.size() % kNumClasses != 0) throw VadError("YAMNet: expected 521 class scores");
+    for (size_t f = 0; f < scores.data.size() / kNumClasses; ++f) {
+        const float* row = scores.data.data() + f * kNumClasses;
         // AudioSet indices 0..3: Speech, Child speech, Conversation, Narration/monologue.
         track_.probs.push_back(std::max({row[0], row[1], row[2], row[3]}));
     }
-    const size_t consumed = std::min(num_samples, static_cast<size_t>(frames) * kHop);
-    pending_.erase(pending_.begin(), pending_.begin() + consumed);
 }
 
 }  // namespace vad

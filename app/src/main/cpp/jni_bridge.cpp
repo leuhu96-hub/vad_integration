@@ -3,7 +3,9 @@
 #include <jni.h>
 
 #include <chrono>
+#include <cstdio>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "audio_decoder.h"
@@ -15,32 +17,39 @@ using namespace vad;
 
 namespace {
 
-Ort::Env& GetEnv() {
-    static Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "vadnative");
-    return env;
-}
+constexpr char kAssetPrefix[] = "asset:";
 
-struct AssetCloser {
-    void operator()(AAsset* a) const { AAsset_close(a); }
-};
-using AssetPtr = std::unique_ptr<AAsset, AssetCloser>;
-
-AssetPtr OpenAsset(AAssetManager* mgr, const char* path, ModelBlob* blob) {
-    AssetPtr asset(AAssetManager_open(mgr, path, AASSET_MODE_BUFFER));
-    if (!asset) throw VadError(std::string("Missing asset ") + path);
-    blob->data = AAsset_getBuffer(asset.get());
-    blob->size = static_cast<size_t>(AAsset_getLength(asset.get()));
-    if (!blob->data) throw VadError(std::string("Cannot read asset ") + path);
-    return asset;
-}
-
-std::vector<const char*> AssetPaths(ModelType type) {
-    switch (type) {
-        case ModelType::kFireRedVad: return {"models/fireredvad_vad.onnx", "models/cmvn.ark"};
-        case ModelType::kSilero: return {"models/silero_vad.onnx"};
-        case ModelType::kYamnet: return {"models/yamnet.onnx"};
+// Loads "asset:<path inside assets>" or an absolute file path.
+std::vector<uint8_t> ReadModelFile(AAssetManager* mgr, const std::string& path) {
+    std::vector<uint8_t> bytes;
+    if (path.rfind(kAssetPrefix, 0) == 0) {
+        const std::string name = path.substr(sizeof(kAssetPrefix) - 1);
+        AAsset* asset = AAssetManager_open(mgr, name.c_str(), AASSET_MODE_BUFFER);
+        if (!asset) throw VadError("Missing asset " + name);
+        const auto* data = static_cast<const uint8_t*>(AAsset_getBuffer(asset));
+        const size_t size = static_cast<size_t>(AAsset_getLength(asset));
+        if (data) bytes.assign(data, data + size);
+        AAsset_close(asset);
+        if (!data) throw VadError("Cannot read asset " + name);
+    } else {
+        FILE* f = std::fopen(path.c_str(), "rb");
+        if (!f) throw VadError("Cannot open model file " + path);
+        std::fseek(f, 0, SEEK_END);
+        bytes.resize(static_cast<size_t>(std::ftell(f)));
+        std::fseek(f, 0, SEEK_SET);
+        const size_t got = std::fread(bytes.data(), 1, bytes.size(), f);
+        std::fclose(f);
+        if (got != bytes.size()) throw VadError("Cannot read model file " + path);
     }
-    throw VadError("Unknown model type");
+    return bytes;
+}
+
+std::string JString(JNIEnv* env, jstring s) {
+    if (!s) return {};
+    const char* c = env->GetStringUTFChars(s, nullptr);
+    std::string out(c);
+    env->ReleaseStringUTFChars(s, c);
+    return out;
 }
 
 void ThrowJava(JNIEnv* env, const char* cls, const char* msg) {
@@ -53,7 +62,8 @@ void ThrowJava(JNIEnv* env, const char* cls, const char* msg) {
 
 extern "C" JNIEXPORT jobject JNICALL
 Java_com_example_vadapp_vad_NativeVad_analyze(JNIEnv* env, jobject /*thiz*/, jobject asset_manager,
-                                              jint model_type, jint fd, jlong offset, jlong length,
+                                              jint model_type, jstring model_path, jstring extra_path,
+                                              jint fd, jlong offset, jlong length,
                                               jint num_threads, jobject listener) {
     const auto t0 = std::chrono::steady_clock::now();
     const auto type = static_cast<ModelType>(model_type);
@@ -63,15 +73,11 @@ Java_com_example_vadapp_vad_NativeVad_analyze(JNIEnv* env, jobject /*thiz*/, job
 
     try {
         AAssetManager* mgr = AAssetManager_fromJava(env, asset_manager);
-        std::vector<AssetPtr> assets;
-        std::vector<ModelBlob> blobs;
-        for (const char* path : AssetPaths(type)) {
-            ModelBlob blob;
-            assets.push_back(OpenAsset(mgr, path, &blob));
-            blobs.push_back(blob);
-        }
-        auto model = VadModel::Create(type, GetEnv(), blobs, num_threads);
-        assets.clear();  // ORT keeps its own copy of the graph
+        const std::string extra = JString(env, extra_path);
+        auto model = VadModel::Create(type, ReadModelFile(mgr, JString(env, model_path)),
+                                      extra.empty() ? std::vector<uint8_t>{} : ReadModelFile(mgr, extra),
+                                      num_threads);
+        const char* format = FormatName(model->format());
 
         size_t total_samples = 0;
         std::chrono::steady_clock::duration model_time{};
@@ -95,23 +101,20 @@ Java_com_example_vadapp_vad_NativeVad_analyze(JNIEnv* env, jobject /*thiz*/, job
         const float duration = static_cast<float>(total_samples) / kTargetSampleRate;
         const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - t0).count();
-        LOGI("model %d: %zu probs, %.2fs audio, %lld ms total, %lld ms in model", model_type,
-             track.probs.size(), duration, static_cast<long long>(elapsed_ms),
+        LOGI("model %d (%s): %zu probs, %.2fs audio, %lld ms total, %lld ms in model", model_type,
+             format, track.probs.size(), duration, static_cast<long long>(elapsed_ms),
              static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(model_time).count()));
 
         jfloatArray probs = env->NewFloatArray(static_cast<jsize>(track.probs.size()));
         env->SetFloatArrayRegion(probs, 0, static_cast<jsize>(track.probs.size()), track.probs.data());
         jstring mime = env->NewStringUTF(info.mime.c_str());
         jclass result_cls = env->FindClass("com/example/vadapp/vad/AnalysisResult");
-        jmethodID ctor = env->GetMethodID(result_cls, "<init>", "([FFFFIILjava/lang/String;J)V");
+        jmethodID ctor = env->GetMethodID(result_cls, "<init>", "([FFFFIILjava/lang/String;Ljava/lang/String;J)V");
         return env->NewObject(result_cls, ctor, probs, track.hop_s, track.offset_s, duration,
-                              info.sample_rate, info.channels, mime,
+                              info.sample_rate, info.channels, mime, env->NewStringUTF(format),
                               static_cast<jlong>(elapsed_ms));
     } catch (const Cancelled&) {
         ThrowJava(env, "java/util/concurrent/CancellationException", "Analysis cancelled");
-    } catch (const Ort::Exception& e) {
-        LOGE("onnxruntime: %s", e.what());
-        ThrowJava(env, "java/lang/RuntimeException", (std::string("ONNX Runtime: ") + e.what()).c_str());
     } catch (const std::exception& e) {
         LOGE("%s", e.what());
         ThrowJava(env, "java/lang/RuntimeException", e.what());

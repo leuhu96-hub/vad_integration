@@ -4,6 +4,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,23 +16,29 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -67,6 +74,7 @@ import androidx.media3.ui.PlayerView
 import com.example.vadapp.MainViewModel
 import com.example.vadapp.PlaybackState
 import com.example.vadapp.UiState
+import com.example.vadapp.vad.ModelSource
 import com.example.vadapp.vad.Segment
 import com.example.vadapp.vad.SegmentSettings
 import com.example.vadapp.vad.VadModelType
@@ -86,6 +94,9 @@ fun MainScreen(vm: MainViewModel) {
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) vm.selectVideo(uri)
+    }
+    val modelPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) vm.importModel(uri)
     }
 
     Scaffold(
@@ -107,7 +118,16 @@ fun MainScreen(vm: MainViewModel) {
         ) {
             Column(Modifier.padding(horizontal = 16.dp)) {
                 ModelSelector(ui.model, onSelect = vm::selectModel)
-                Spacer(Modifier.height(8.dp))
+                ModelSourceRow(
+                    sources = ui.currentSources,
+                    selected = ui.currentSource,
+                    onSelect = vm::selectSource,
+                    onRemove = vm::removeModel,
+                    // Model files have no reliable MIME type, so let the user pick anything;
+                    // the format is detected from the content.
+                    onImport = { modelPicker.launch(arrayOf("*/*")) },
+                )
+                Spacer(Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Button(onClick = { picker.launch(arrayOf("video/*", "audio/*")) }) {
                         Icon(Icons.Filled.VideoLibrary, contentDescription = null)
@@ -153,6 +173,55 @@ private fun ModelSelector(selected: VadModelType, onSelect: (VadModelType) -> Un
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(top = 4.dp),
     )
+}
+
+@Composable
+private fun ModelSourceRow(
+    sources: List<ModelSource>,
+    selected: ModelSource?,
+    onSelect: (ModelSource) -> Unit,
+    onRemove: (ModelSource) -> Unit,
+    onImport: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("Model:", style = MaterialTheme.typography.labelMedium)
+        if (sources.isEmpty()) {
+            Text(
+                "chưa có file",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        sources.forEach { src ->
+            FilterChip(
+                selected = src == selected,
+                onClick = { onSelect(src) },
+                label = { Text(if (src.custom) "${src.fileName} · ${src.format.label}" else src.label) },
+                trailingIcon = if (src.custom) {
+                    {
+                        Icon(
+                            Icons.Filled.Close,
+                            contentDescription = "Xóa ${src.fileName}",
+                            modifier = Modifier
+                                .size(18.dp)
+                                .clickable { onRemove(src) },
+                        )
+                    }
+                } else null,
+            )
+        }
+        AssistChip(
+            onClick = onImport,
+            label = { Text("Nạp .onnx/.tflite") },
+            leadingIcon = { Icon(Icons.Filled.FileOpen, contentDescription = null, Modifier.size(18.dp)) },
+        )
+    }
 }
 
 @androidx.annotation.OptIn(UnstableApi::class)
@@ -266,8 +335,8 @@ private fun PlayerSection(ui: UiState, pb: PlaybackState, vm: MainViewModel) {
             val ratio = if (r.durationSec > 0) speech / r.durationSec * 100 else 0.0
             Text(
                 String.format(
-                    Locale.US, "%d Hz · %d kênh · %s · %d đoạn · speech %.0f%% · xử lý %.1fs",
-                    r.sourceSampleRate, r.sourceChannels, r.mime.removePrefix("audio/"),
+                    Locale.US, "%s · %d Hz · %d kênh · %s · %d đoạn · speech %.0f%% · xử lý %.1fs",
+                    r.format, r.sourceSampleRate, r.sourceChannels, r.mime.removePrefix("audio/"),
                     ui.segments.size, ratio, r.elapsedMs / 1000f,
                 ),
                 style = MaterialTheme.typography.labelSmall,

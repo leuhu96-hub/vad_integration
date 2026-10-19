@@ -10,6 +10,8 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import com.example.vadapp.vad.AnalysisResult
+import com.example.vadapp.vad.ModelRegistry
+import com.example.vadapp.vad.ModelSource
 import com.example.vadapp.vad.NativeVad
 import com.example.vadapp.vad.Segment
 import com.example.vadapp.vad.SegmentSettings
@@ -30,6 +32,9 @@ import kotlinx.coroutines.withContext
 data class UiState(
     val model: VadModelType = VadModelType.FIRERED,
     val settings: Map<VadModelType, SegmentSettings> = VadModelType.entries.associateWith { it.defaults },
+    /** Model files found for each model type (bundled ONNX/TFLite + user imports). */
+    val sources: Map<VadModelType, List<ModelSource>> = emptyMap(),
+    val selectedSource: Map<VadModelType, ModelSource> = emptyMap(),
     val videoUri: Uri? = null,
     val videoName: String? = null,
     val analyzing: Boolean = false,
@@ -39,7 +44,11 @@ data class UiState(
     val error: String? = null,
 ) {
     val currentSettings: SegmentSettings get() = settings.getValue(model)
+    val currentSources: List<ModelSource> get() = sources[model].orEmpty()
+    val currentSource: ModelSource? get() = selectedSource[model]
 }
+
+private data class AnalysisKey(val video: Uri, val model: VadModelType, val modelPath: String)
 
 data class PlaybackState(
     val positionMs: Long = 0,
@@ -63,8 +72,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _playback = MutableStateFlow(PlaybackState())
     val playback: StateFlow<PlaybackState> = _playback.asStateFlow()
 
-    // Results are cached per (video, model) so switching models back and forth is instant.
-    private val cache = HashMap<Pair<Uri, VadModelType>, AnalysisResult>()
+    private val registry = ModelRegistry(app)
+
+    // Results are cached per (video, model, model file) so switching back and forth is instant.
+    private val cache = HashMap<AnalysisKey, AnalysisResult>()
     private var analysisJob: Job? = null
     private var stopAtMs: Long = -1
 
@@ -78,6 +89,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         })
         viewModelScope.launch { pollPlayer() }
+        refreshSources()
+    }
+
+    // Only lists a directory and reads 8-byte headers, cheap enough for the main thread.
+    private fun refreshSources() {
+        val sources = VadModelType.entries.associateWith { registry.sources(it) }
+        _ui.update { s ->
+            // Keep the user's pick if it still exists, otherwise take the first available file.
+            val selected = VadModelType.entries.mapNotNull { t ->
+                val list = sources[t].orEmpty()
+                (s.selectedSource[t]?.takeIf { it in list } ?: list.firstOrNull())?.let { t to it }
+            }.toMap()
+            s.copy(sources = sources, selectedSource = selected)
+        }
     }
 
     // ------------------------------------------------------------------ input
@@ -88,9 +113,42 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         analyze()
     }
 
+    fun selectSource(source: ModelSource) {
+        if (source == _ui.value.currentSource) return
+        _ui.update { it.copy(selectedSource = it.selectedSource + (it.model to source)) }
+        analyze()
+    }
+
+    /** Imports a .onnx/.tflite file for the current model type and switches to it. */
+    fun importModel(uri: Uri) {
+        val type = _ui.value.model
+        viewModelScope.launch {
+            try {
+                val source = withContext(Dispatchers.IO) { registry.import(type, uri) }
+                cache.keys.removeAll { it.modelPath == source.path }
+                refreshSources()
+                _ui.update { it.copy(selectedSource = it.selectedSource + (type to source), error = null) }
+                if (_ui.value.model == type) analyze()
+            } catch (e: Exception) {
+                _ui.update { it.copy(error = e.message ?: e.toString()) }
+            }
+        }
+    }
+
+    fun removeModel(source: ModelSource) {
+        if (!source.custom) return
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { registry.delete(source) }
+            cache.keys.removeAll { it.modelPath == source.path }
+            val wasSelected = _ui.value.currentSource == source
+            refreshSources()
+            if (wasSelected) analyze()
+        }
+    }
+
     fun selectVideo(uri: Uri) {
         val name = queryName(uri)
-        cache.keys.removeAll { it.first != uri }
+        cache.keys.removeAll { it.video != uri }
         _ui.update { it.copy(videoUri = uri, videoName = name, result = null, segments = emptyList(), error = null) }
         stopAtMs = -1
         _playback.update { PlaybackState(speechOnly = it.speechOnly) }
@@ -115,8 +173,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val uri = state.videoUri ?: return
         val model = state.model
         analysisJob?.cancel()
+        val source = state.currentSource
+        if (source == null) {
+            _ui.update {
+                it.copy(analyzing = false, result = null, segments = emptyList(),
+                    error = "Không có file model cho ${model.label} (.onnx hoặc .tflite)")
+            }
+            return
+        }
+        val key = AnalysisKey(uri, model, source.path)
+        fun stillCurrent() = _ui.value.let { it.videoUri == uri && it.model == model && it.currentSource == source }
 
-        cache[uri to model]?.let { cached ->
+        cache[key]?.let { cached ->
             _ui.update { it.copy(analyzing = false, result = cached, error = null) }
             resegment()
             return
@@ -127,15 +195,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val result = withContext(Dispatchers.Default) {
                     val job = coroutineContext[Job]
-                    runNative(uri, model) { job?.isActive != false }
+                    runNative(uri, model, source) { job?.isActive != false }
                 }
-                cache[uri to model] = result
-                if (_ui.value.model == model && _ui.value.videoUri == uri) {
+                cache[key] = result
+                if (stillCurrent()) {
                     _ui.update { it.copy(analyzing = false, result = result) }
                     resegment()
                 }
             } catch (e: CancellationException) {
-                if (_ui.value.model == model && _ui.value.videoUri == uri) {
+                if (stillCurrent()) {
                     _ui.update { it.copy(analyzing = false) }
                 }
                 throw e
@@ -145,14 +213,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun runNative(uri: Uri, model: VadModelType, keepGoing: () -> Boolean): AnalysisResult {
+    private fun runNative(
+        uri: Uri, model: VadModelType, source: ModelSource, keepGoing: () -> Boolean,
+    ): AnalysisResult {
         val app = getApplication<Application>()
         val afd = app.contentResolver.openAssetFileDescriptor(uri, "r")
             ?: error("Không mở được file")
         return afd.use {
             val length = if (it.length == AssetFileDescriptor.UNKNOWN_LENGTH) Long.MAX_VALUE else it.length
             val threads = Runtime.getRuntime().availableProcessors().coerceIn(1, 4)
-            NativeVad.analyze(app.assets, model.id, it.parcelFileDescriptor.fd, it.startOffset, length, threads) { p ->
+            NativeVad.analyze(
+                app.assets, model.id, source.path, model.extraAsset,
+                it.parcelFileDescriptor.fd, it.startOffset, length, threads,
+            ) { p ->
                 _ui.update { s -> s.copy(progress = p) }
                 keepGoing()
             }

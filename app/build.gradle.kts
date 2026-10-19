@@ -3,19 +3,30 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-// onnxruntime-android ships headers + .so inside the AAR but no prefab package,
-// so we unpack it for CMake. The same AAR is also an `implementation` dependency,
-// which is what actually packages libonnxruntime.so into the APK.
+// onnxruntime-android and LiteRT (TFLite) ship headers + .so inside their AARs but no
+// prefab package, so we unpack them for CMake. The same AARs are also `implementation`
+// dependencies, which is what actually packages the .so files into the APK.
 val ortAar: Configuration by configurations.creating {
     isCanBeConsumed = false
     isCanBeResolved = true
     isTransitive = false
 }
+val tfliteAar: Configuration by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    isTransitive = false
+}
 val ortDir = layout.buildDirectory.dir("ort")
+val tfliteDir = layout.buildDirectory.dir("tflite")
 val extractOrt by tasks.registering(Sync::class) {
     from({ ortAar.map { zipTree(it) } })
     include("headers/**", "jni/**")
     into(ortDir)
+}
+val extractTflite by tasks.registering(Sync::class) {
+    from({ tfliteAar.map { zipTree(it) } })
+    include("headers/**", "jni/**")
+    into(tfliteDir)
 }
 
 android {
@@ -40,6 +51,7 @@ android {
                 arguments += listOf(
                     "-DANDROID_STL=c++_shared",
                     "-DORT_DIR=${ortDir.get().asFile.absolutePath.replace('\\', '/')}",
+                    "-DTFLITE_DIR=${tfliteDir.get().asFile.absolutePath.replace('\\', '/')}",
                 )
             }
         }
@@ -69,23 +81,26 @@ android {
     }
     androidResources {
         // Models are memory-mapped/read straight from the APK.
-        noCompress += listOf("onnx", "ark")
+        noCompress += listOf("onnx", "tflite", "ark")
     }
     packaging {
         jniLibs {
             // ORT's own JNI bridge is not used; we call the C++ API from our .so.
+            // (libtensorflowlite_jni.so stays: it is also the library exporting the TFLite C API.)
             excludes += "**/libonnxruntime4j_jni.so"
         }
     }
 }
 
 tasks.matching { it.name.contains("CMake") }.configureEach {
-    dependsOn(extractOrt)
+    dependsOn(extractOrt, extractTflite)
 }
 
 dependencies {
     ortAar(libs.onnxruntime.android)
     implementation(libs.onnxruntime.android)
+    tfliteAar(libs.litert)
+    implementation(libs.litert)
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
