@@ -39,6 +39,7 @@ fun Timeline(
     val colors = MaterialTheme.colorScheme
     val segColor = colors.primary
     val curveColor = colors.tertiary
+    val waveColor = colors.onSurfaceVariant.copy(alpha = 0.45f)
     val bg = colors.surfaceVariant
     val gridColor = colors.outlineVariant
     val playheadColor = colors.error
@@ -74,6 +75,25 @@ fun Timeline(
             val alpha = if (i == highlightSegment) 0.40f else 0.18f
             drawRect(segColor.copy(alpha = alpha), Offset(x0, 0f), Size(max(1f, x1 - x0), h))
             drawRect(segColor, Offset(x0, h - 8f), Size(max(1f, x1 - x0), 8f))
+        }
+
+        // Waveform: one symmetric bar per pixel column from the peak envelope.
+        if (result != null && result.envelope.isNotEmpty() && result.envelopeHopSec > 0f) {
+            val env = result.envelope
+            val mid = (h - 12f) / 2f
+            val cols = w.toInt().coerceAtLeast(1)
+            for (px in 0 until cols) {
+                val t0 = viewStartSec + px / w * range
+                val t1 = viewStartSec + (px + 1) / w * range
+                if (t1 < 0f) continue
+                val i0 = (t0 / result.envelopeHopSec).toInt().coerceAtLeast(0)
+                val i1 = (t1 / result.envelopeHopSec).toInt().coerceAtMost(env.size - 1)
+                if (i0 > i1) continue
+                var hi = 0f
+                for (i in i0..i1) hi = max(hi, env[i])
+                val a = max(1f, hi * (mid - 4f))
+                drawLine(waveColor, Offset(px + 0.5f, mid - a), Offset(px + 0.5f, mid + a), strokeWidth = 1f)
+            }
         }
 
         // Probability curve, one min/max column per pixel so long files stay cheap to draw.

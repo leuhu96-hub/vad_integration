@@ -4,7 +4,8 @@ data class SegmentSettings(
     val threshold: Float,
     val minSpeechMs: Int,
     val minSilenceMs: Int,
-    val padMs: Int,
+    val prePadMs: Int,
+    val postPadMs: Int,
 )
 
 /**
@@ -20,15 +21,15 @@ enum class VadModelType(
 ) {
     FIRERED(
         0, "FireRedVAD", "DFSMN, fbank 80 + CMVN, khung 10 ms", "fireredvad_vad",
-        SegmentSettings(threshold = 0.4f, minSpeechMs = 200, minSilenceMs = 200, padMs = 0),
+        SegmentSettings(threshold = 0.4f, minSpeechMs = 200, minSilenceMs = 200, prePadMs = 0, postPadMs = 0),
     ),
     SILERO(
         1, "Silero", "Silero VAD v6, cửa sổ 32 ms", "silero_vad",
-        SegmentSettings(threshold = 0.5f, minSpeechMs = 250, minSilenceMs = 100, padMs = 30),
+        SegmentSettings(threshold = 0.5f, minSpeechMs = 250, minSilenceMs = 100, prePadMs = 30, postPadMs = 30),
     ),
     YAMNET(
-        2, "YAMNet", "AudioSet 521 lớp, lớp Speech, bước 0.48 s", "yamnet",
-        SegmentSettings(threshold = 0.3f, minSpeechMs = 250, minSilenceMs = 500, padMs = 0),
+        2, "YAMNet", "Speech/non-speech theo cửa sổ 0.96 s, bước 0.08 s", "yamnet",
+        SegmentSettings(threshold = 0.3f, minSpeechMs = 250, minSilenceMs = 500, prePadMs = 0, postPadMs = 0),
     );
 
     /** Extra file the native runner needs besides the network itself. */

@@ -160,10 +160,15 @@ void SileroVadModel::RunWindow() {
 // ---------------------------------------------------------------- YAMNet
 
 YamnetModel::YamnetModel(std::unique_ptr<InferenceSession> s) : VadModel(std::move(s)) {
+    // Fixed input is [N] or [1, N]; the retrained model takes one 0.96 s window (N = 15360).
     const auto shape = session_->InputShape(0);
-    if (shape.size() == 1 && shape[0] > 0) fixed_len_ = static_cast<size_t>(shape[0]);
-    track_.hop_s = static_cast<float>(kHop) / kTargetSampleRate;
-    track_.offset_s = static_cast<float>(kPatch) / 2 / kTargetSampleRate;
+    if (!shape.empty() && shape.size() <= 2 && shape.back() > 0) {
+        fixed_len_ = static_cast<size_t>(shape.back());
+        batched_ = shape.size() == 2;
+    }
+    const size_t patch = fixed_len_ > 0 ? fixed_len_ : static_cast<size_t>(kPatch);
+    track_.hop_s = static_cast<float>(fixed_len_ > 0 ? kHop : kGraphHop) / kTargetSampleRate;
+    track_.offset_s = static_cast<float>(patch) / 2 / kTargetSampleRate;
 }
 
 void YamnetModel::Feed(const float* samples, size_t n) {
@@ -180,16 +185,58 @@ void YamnetModel::Feed(const float* samples, size_t n) {
         pending_start_ += drop;
         return;
     }
-    constexpr size_t run_len = kPatch + static_cast<size_t>(kHop) * (kFramesPerRun - 1);
+    constexpr size_t run_len = kPatch + static_cast<size_t>(kGraphHop) * (kFramesPerRun - 1);
     while (pending_.size() >= run_len) RunDynamic(run_len);
 }
 
 void YamnetModel::Finish() {
+    FlushWindows();
+    ToSlots();
+}
+
+void YamnetModel::ToSlots() {
+    // Window i covers [i * hop, i * hop + 2 * offset) with its score in probs[i]. Cut the
+    // timeline into hop-sized slots; a slot's probability is the average of the windows
+    // covering it, weighted by a triangle that peaks at the window centre and falls to 0 at
+    // its edges.
+    const float hop = track_.hop_s;
+    const float half = track_.offset_s;
+    const int n = static_cast<int>(track_.probs.size());
+    if (n == 0) return;
+    const float duration_s = static_cast<float>(total_samples_) / kTargetSampleRate;
+    const int slots = std::max(1, static_cast<int>(std::ceil(duration_s / hop - 1e-4f)));
+    std::vector<float> num(slots, 0.0f), den(slots, 0.0f);
+    for (int i = 0; i < n; ++i) {
+        const float centre = half + i * hop;
+        const int k0 = std::max(0, static_cast<int>(std::floor((centre - half) / hop)));
+        const int k1 = std::min(slots - 1, static_cast<int>(std::ceil((centre + half) / hop)));
+        for (int k = k0; k <= k1; ++k) {
+            const float w = 1.0f - std::fabs((k + 0.5f) * hop - centre) / half;
+            if (w <= 0) continue;
+            num[k] += w * track_.probs[i];
+            den[k] += w;
+        }
+    }
+    std::vector<float> slot_prob(slots);
+    for (int k = 0; k < slots; ++k) {
+        if (den[k] > 0) {
+            slot_prob[k] = num[k] / den[k];
+        } else {
+            // No window reaches this slot: take the nearest one.
+            const int i = std::clamp(static_cast<int>(((k + 0.5f) * hop - half) / hop + 0.5f), 0, n - 1);
+            slot_prob[k] = track_.probs[i];
+        }
+    }
+    track_.probs = std::move(slot_prob);
+    track_.offset_s = hop / 2;  // probs[k] is now centred at (k + 0.5) * hop
+}
+
+void YamnetModel::FlushWindows() {
     if (fixed_len_ > 0) {
-        // Emit the same number of patches as the whole-waveform graph would
-        // (1 + ceil((N - 0.96 s) / 0.48 s)), zero-padding the tail.
-        const size_t target = total_samples_ <= static_cast<size_t>(kPatch)
-                ? 1 : 1 + (total_samples_ - kPatch + kHop - 1) / kHop;
+        // Patches cover [k * hop, k * hop + fixed_len): 1 + ceil((N - fixed_len) / hop)
+        // of them, zero-padding the tail.
+        const size_t target = total_samples_ <= fixed_len_
+                ? 1 : 1 + (total_samples_ - fixed_len_ + kHop - 1) / kHop;
         std::vector<float> window(fixed_len_);
         while (next_frame_ < target) {
             std::fill(window.begin(), window.end(), 0.0f);
@@ -207,15 +254,16 @@ void YamnetModel::Finish() {
     // Leftover audio that is not yet covered by any emitted patch. The graph zero-pads
     // short input to one full patch; skip a sliver that the previous patch already overlaps.
     const bool nothing_yet = track_.probs.empty();
-    if (!pending_.empty() && (nothing_yet || pending_.size() > kPatch - kHop)) {
+    if (!pending_.empty() && (nothing_yet || pending_.size() > kPatch - kGraphHop)) {
         RunDynamic(pending_.size());
     }
     pending_.clear();
 }
 
 void YamnetModel::RunFixed(const float* window) {
-    auto out = session_->Run({{"waveform", DType::kFloat32, {static_cast<int64_t>(fixed_len_)}, window}},
-                             {"output_0"});
+    std::vector<int64_t> shape{static_cast<int64_t>(fixed_len_)};
+    if (batched_) shape.insert(shape.begin(), 1);
+    auto out = session_->Run({{"waveform", DType::kFloat32, shape, window}}, {"output_0"});
     AppendScores(out[0]);
 }
 
@@ -224,12 +272,27 @@ void YamnetModel::RunDynamic(size_t num_samples) {
                              {"output_0"});
     const size_t frames = out[0].data.size() / kNumClasses;
     AppendScores(out[0]);
-    const size_t consumed = std::min(num_samples, frames * kHop);
+    const size_t consumed = std::min(num_samples, frames * kGraphHop);
     pending_.erase(pending_.begin(), pending_.begin() + consumed);
 }
 
 void YamnetModel::AppendScores(const OutputTensor& scores) {
-    if (scores.data.size() % kNumClasses != 0) throw VadError("YAMNet: expected 521 class scores");
+    const auto& d = scores.data;
+    if (fixed_len_ > 0 && d.size() <= 2) {
+        // Retrained model: one score per 0.96 s window.
+        //  1 value  -> speech probability (sigmoid applied if it looks like a logit);
+        //  2 values -> [non-speech, speech], softmax applied if they are not already probabilities.
+        float p;
+        if (d.size() == 1) {
+            p = (d[0] >= 0.0f && d[0] <= 1.0f) ? d[0] : 1.0f / (1.0f + std::exp(-d[0]));
+        } else {
+            const bool is_prob = d[0] >= 0.0f && d[1] >= 0.0f && std::fabs(d[0] + d[1] - 1.0f) < 1e-3f;
+            p = is_prob ? d[1] : 1.0f / (1.0f + std::exp(d[0] - d[1]));
+        }
+        track_.probs.push_back(p);
+        return;
+    }
+    if (scores.data.size() % kNumClasses != 0) throw VadError("YAMNet: expected 1, 2 or 521 scores");
     for (size_t f = 0; f < scores.data.size() / kNumClasses; ++f) {
         const float* row = scores.data.data() + f * kNumClasses;
         // AudioSet indices 0..3: Speech, Child speech, Conversation, Narration/monologue.

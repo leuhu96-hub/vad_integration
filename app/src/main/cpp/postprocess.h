@@ -12,7 +12,8 @@ struct SegmentParams {
     float threshold = 0.5f;
     int min_speech_ms = 250;
     int min_silence_ms = 100;
-    int pad_ms = 0;
+    int pre_pad_ms = 0;   // extends the start of each segment
+    int post_pad_ms = 0;  // extends the end of each segment
     float max_speech_s = 20.0f;  // FireRedVAD splits longer segments at a probability dip
 };
 

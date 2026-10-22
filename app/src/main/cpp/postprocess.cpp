@@ -14,9 +14,10 @@ constexpr float kFrameLengthS = 0.025f;
 class FireRedPostprocessor {
 public:
     FireRedPostprocessor(int smooth_window, float threshold, int min_speech, int max_speech,
-                         int min_silence, int extend_speech)
+                         int min_silence, int extend_pre, int extend_post)
         : smooth_(std::max(1, smooth_window)), threshold_(threshold), min_speech_(min_speech),
-          max_speech_(max_speech), min_silence_(min_silence), extend_(extend_speech) {}
+          max_speech_(max_speech), min_silence_(min_silence), extend_pre_(extend_pre),
+          extend_post_(extend_post) {}
 
     std::vector<int> Process(const std::vector<float>& probs) const {
         if (probs.empty()) return {};
@@ -113,12 +114,12 @@ private:
     }
 
     std::vector<int> Extend(const std::vector<int>& d) const {
-        if (extend_ <= 0) return d;
+        if (extend_pre_ <= 0 && extend_post_ <= 0) return d;
         const int n = static_cast<int>(d.size());
         std::vector<int> out(n, 0);
         for (int t = 0; t < n; ++t) {
             if (d[t] == 1) {
-                std::fill(out.begin() + std::max(0, t - extend_), out.begin() + std::min(n, t + extend_ + 1), 1);
+                std::fill(out.begin() + std::max(0, t - extend_pre_), out.begin() + std::min(n, t + extend_post_ + 1), 1);
             }
         }
         return out;
@@ -149,7 +150,7 @@ private:
 
     int smooth_;
     float threshold_;
-    int min_speech_, max_speech_, min_silence_, extend_;
+    int min_speech_, max_speech_, min_silence_, extend_pre_, extend_post_;
 };
 
 // ------------------------------------------------- Silero (utils_vad.get_speech_timestamps)
@@ -160,7 +161,8 @@ std::vector<Segment> SileroSegments(const ProbTrack& track, float duration_s, co
     const int64_t audio_len = static_cast<int64_t>(duration_s * sr);
     const int64_t min_speech = static_cast<int64_t>(sr) * p.min_speech_ms / 1000;
     const int64_t min_silence = static_cast<int64_t>(sr) * p.min_silence_ms / 1000;
-    const int64_t pad = static_cast<int64_t>(sr) * p.pad_ms / 1000;
+    const int64_t pre = static_cast<int64_t>(sr) * p.pre_pad_ms / 1000;
+    const int64_t post = static_cast<int64_t>(sr) * p.post_pad_ms / 1000;
     const float neg_threshold = std::max(p.threshold - 0.15f, 0.01f);
 
     struct S { int64_t start, end; };
@@ -187,18 +189,22 @@ std::vector<Segment> SileroSegments(const ProbTrack& track, float duration_s, co
     if (triggered && audio_len - cur_start > min_speech) speeches.push_back({cur_start, audio_len});
 
     for (size_t i = 0; i < speeches.size(); ++i) {
-        if (i == 0) speeches[i].start = std::max<int64_t>(0, speeches[i].start - pad);
+        if (i == 0) speeches[i].start = std::max<int64_t>(0, speeches[i].start - pre);
         if (i + 1 < speeches.size()) {
             const int64_t silence = speeches[i + 1].start - speeches[i].end;
-            if (silence < 2 * pad) {
-                speeches[i].end += silence / 2;
-                speeches[i + 1].start = std::max<int64_t>(0, speeches[i + 1].start - silence / 2);
+            if (silence < pre + post) {
+                // Not enough room for both paddings: share the gap in proportion to them
+                // (an even split when pre == post, as in the reference).
+                const int64_t to_end = pre == post ? silence / 2 : silence * post / (pre + post);
+                const int64_t to_next = pre == post ? silence / 2 : silence - to_end;
+                speeches[i].end += to_end;
+                speeches[i + 1].start = std::max<int64_t>(0, speeches[i + 1].start - to_next);
             } else {
-                speeches[i].end = std::min(audio_len, speeches[i].end + pad);
-                speeches[i + 1].start = std::max<int64_t>(0, speeches[i + 1].start - pad);
+                speeches[i].end = std::min(audio_len, speeches[i].end + post);
+                speeches[i + 1].start = std::max<int64_t>(0, speeches[i + 1].start - pre);
             }
         } else {
-            speeches[i].end = std::min(audio_len, speeches[i].end + pad);
+            speeches[i].end = std::min(audio_len, speeches[i].end + post);
         }
     }
     std::vector<Segment> segs;
@@ -211,17 +217,15 @@ std::vector<Segment> SileroSegments(const ProbTrack& track, float duration_s, co
 // ------------------------------------------------- YAMNet (simple threshold + merge)
 
 std::vector<Segment> YamnetSegments(const ProbTrack& track, float duration_s, const SegmentParams& p) {
-    // Each 0.96 s patch is attributed to its central 0.48 s (= hop), so neighbouring
-    // patches tile the timeline without overlap.
+    // The track already holds one probability per hop-sized slot (see YamnetModel::ToSlots):
+    // probs[k] covers [k * hop, (k + 1) * hop).
     const float hop = track.hop_s;
+    const int slots = static_cast<int>(track.probs.size());
     std::vector<Segment> raw;
-    const int n = static_cast<int>(track.probs.size());
-    for (int i = 0; i < n; ++i) {
-        if (track.probs[i] < p.threshold) continue;
-        float s = track.offset_s + (i - 0.5f) * hop;
-        float e = track.offset_s + (i + 0.5f) * hop;
-        if (i == 0) s = 0;
-        if (i == n - 1) e = duration_s;
+    for (int k = 0; k < slots; ++k) {
+        if (track.probs[k] < p.threshold) continue;
+        const float s = k * hop;
+        const float e = std::min(duration_s, (k + 1) * hop);
         if (!raw.empty() && s <= raw.back().second + 1e-4f) {
             raw.back().second = e;
         } else {
@@ -237,11 +241,12 @@ std::vector<Segment> YamnetSegments(const ProbTrack& track, float duration_s, co
         }
     }
     std::vector<Segment> out;
-    const float pad = p.pad_ms / 1000.0f;
+    const float pre = p.pre_pad_ms / 1000.0f;
+    const float post = p.post_pad_ms / 1000.0f;
     for (auto seg : merged) {
         if ((seg.second - seg.first) * 1000 < p.min_speech_ms) continue;
-        seg.first = std::max(0.0f, seg.first - pad);
-        seg.second = std::min(duration_s, seg.second + pad);
+        seg.first = std::max(0.0f, seg.first - pre);
+        seg.second = std::min(duration_s, seg.second + post);
         if (!out.empty() && seg.first <= out.back().second) {
             out.back().second = seg.second;
         } else {
@@ -261,7 +266,8 @@ std::vector<Segment> MakeSegments(ModelType type, const ProbTrack& track,
             FireRedPostprocessor pp(/*smooth_window=*/5, params.threshold,
                                     std::max(1, params.min_speech_ms / 10),
                                     std::max(1, static_cast<int>(params.max_speech_s * 100)),
-                                    params.min_silence_ms / 10, params.pad_ms / 10);
+                                    params.min_silence_ms / 10, params.pre_pad_ms / 10,
+                                    params.post_pad_ms / 10);
             segs = pp.ToSegments(pp.Process(track.probs), duration_s);
             break;
         }

@@ -2,7 +2,9 @@
 #include <android/asset_manager_jni.h>
 #include <jni.h>
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -81,8 +83,21 @@ Java_com_example_vadapp_vad_NativeVad_analyze(JNIEnv* env, jobject /*thiz*/, job
 
         size_t total_samples = 0;
         std::chrono::steady_clock::duration model_time{};
+        // Peak envelope of the 16 kHz mono signal for the waveform view, one value per bucket.
+        constexpr size_t kEnvelopeBucket = kTargetSampleRate / 100;  // 10 ms
+        std::vector<float> envelope;
+        float bucket_peak = 0.0f;
+        size_t bucket_fill = 0;
         PcmSink sink = [&](const float* s, size_t n) {
             total_samples += n;
+            for (size_t i = 0; i < n; ++i) {
+                bucket_peak = std::max(bucket_peak, std::fabs(s[i]));
+                if (++bucket_fill == kEnvelopeBucket) {
+                    envelope.push_back(bucket_peak);
+                    bucket_peak = 0.0f;
+                    bucket_fill = 0;
+                }
+            }
             const auto m0 = std::chrono::steady_clock::now();
             model->Feed(s, n);
             model_time += std::chrono::steady_clock::now() - m0;
@@ -107,12 +122,20 @@ Java_com_example_vadapp_vad_NativeVad_analyze(JNIEnv* env, jobject /*thiz*/, job
 
         jfloatArray probs = env->NewFloatArray(static_cast<jsize>(track.probs.size()));
         env->SetFloatArrayRegion(probs, 0, static_cast<jsize>(track.probs.size()), track.probs.data());
+        if (bucket_fill > 0) envelope.push_back(bucket_peak);
+        const float peak = envelope.empty() ? 0.0f : *std::max_element(envelope.begin(), envelope.end());
+        if (peak > 0.0f) {
+            for (float& v : envelope) v /= peak;  // normalise so quiet files stay readable
+        }
+        jfloatArray env_arr = env->NewFloatArray(static_cast<jsize>(envelope.size()));
+        env->SetFloatArrayRegion(env_arr, 0, static_cast<jsize>(envelope.size()), envelope.data());
         jstring mime = env->NewStringUTF(info.mime.c_str());
         jclass result_cls = env->FindClass("com/example/vadapp/vad/AnalysisResult");
-        jmethodID ctor = env->GetMethodID(result_cls, "<init>", "([FFFFIILjava/lang/String;Ljava/lang/String;J)V");
+        jmethodID ctor = env->GetMethodID(result_cls, "<init>", "([FFFFIILjava/lang/String;Ljava/lang/String;J[FF)V");
         return env->NewObject(result_cls, ctor, probs, track.hop_s, track.offset_s, duration,
                               info.sample_rate, info.channels, mime, env->NewStringUTF(format),
-                              static_cast<jlong>(elapsed_ms));
+                              static_cast<jlong>(elapsed_ms), env_arr,
+                              static_cast<float>(kEnvelopeBucket) / kTargetSampleRate);
     } catch (const Cancelled&) {
         ThrowJava(env, "java/util/concurrent/CancellationException", "Analysis cancelled");
     } catch (const std::exception& e) {
@@ -127,7 +150,7 @@ Java_com_example_vadapp_vad_NativeVad_segment(JNIEnv* env, jobject /*thiz*/, jin
                                               jfloatArray probs, jfloat hop_s, jfloat offset_s,
                                               jfloat duration_s, jfloat threshold,
                                               jint min_speech_ms, jint min_silence_ms,
-                                              jint pad_ms) {
+                                              jint pre_pad_ms, jint post_pad_ms) {
     ProbTrack track;
     track.hop_s = hop_s;
     track.offset_s = offset_s;
@@ -138,7 +161,8 @@ Java_com_example_vadapp_vad_NativeVad_segment(JNIEnv* env, jobject /*thiz*/, jin
     params.threshold = threshold;
     params.min_speech_ms = min_speech_ms;
     params.min_silence_ms = min_silence_ms;
-    params.pad_ms = pad_ms;
+    params.pre_pad_ms = pre_pad_ms;
+    params.post_pad_ms = post_pad_ms;
 
     const auto segs = MakeSegments(static_cast<ModelType>(model_type), track, duration_s, params);
     std::vector<float> flat;

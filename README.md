@@ -33,7 +33,28 @@ vào `app/build/ort` cho CMake.
 - Danh sách segment: chạm để seek, nút ▶ để phát đúng đoạn đó (tự dừng ở cuối đoạn).
 - Nút đoạn trước/sau, công tắc "Chỉ speech" (tự nhảy qua khoảng lặng).
 - Biểu tượng ⚙ mở tham số: ngưỡng, speech tối thiểu, khoảng lặng tối thiểu, nới rộng 2 đầu.
-- Kết quả được cache theo (file, model).
+- Kết quả được cache theo (file, model). Tham số được lưu lại (SharedPreferences).
+
+## Chế độ Dev (nút </> trên thanh trên)
+
+Chọn tham số tốt nhất cho user từ một bộ dữ liệu có ground truth:
+
+1. Chọn thư mục video (`<gốc>/<quality>/…/tên.mp4`) và thư mục GT (`<gốc>/<category>/…/tên.txt`,
+   mỗi dòng `start end speech|no-speech`, bin 0.5 s). Ghép video ↔ GT theo tên file.
+2. Chia dev/test theo tỷ lệ chọn: phân tầng quality × category, cân theo thời lượng, rồi hoán đổi
+   file cho tỷ lệ speech hai tập gần nhau.
+3. Chạy các model (xác suất cache ở `filesDir/devcache`), quét ngưỡng 0.00…1.00 cho 5 cấu hình
+   hậu xử lý cộng dồn: A0 điểm bin thô · A1 rescore + rebin · A2 + merge · A3 + drop · A4 + pad.
+   Bin 0.5 s là speech khi phần speech ≥ tỷ lệ chọn (mặc định 20 %).
+   Bật "Tìm bộ hậu xử lý tối ưu" để thử mọi tổ hợp merge × drop × pre pad × post pad × ngưỡng
+   (grid sửa được) trên tập dev theo tiêu chí đang chọn; tổ hợp tốt nhất thành cấu hình **A5**.
+4. Chọn ngưỡng trên dev (DCF-min / F1-max / Youden / EER / MR ≤ x), đánh giá trên test ở 3 chế độ:
+   strict (mọi bin), collar ±1 bin (bỏ bin biên), chỉ bin biên → TP FN FP TN MR FAR Precision Recall
+   F1 Specificity DCF + CI95 bootstrap theo file, ROC/AUC, so sánh model, theo nhóm.
+5. "Áp dụng cho user" ghi ngưỡng + tham số của cấu hình vào cài đặt; "Xuất" tạo file `.xlsx`
+   (bảng tổng hợp bằng công thức, tham số nền vàng) và ảnh ROC.
+
+Code: `vad/eval/` (GT, quét SAF, chia tập, metrics, xlsx), `DevViewModel.kt`, `ui/DevScreen.kt`.
 
 ## Build
 
@@ -48,3 +69,6 @@ ABI: `arm64-v8a`, `x86_64`. minSdk 26.
 `NativeVadTest` (androidTest) chạy cả 3 model trên mọi file trong `filesDir/vadtest/`
 và ghi `<file>.<model>.json` (xác suất + segment) để so với Python (kaldi-native-fbank +
 onnxruntime + postprocessor gốc). Hướng dẫn chạy nằm trong comment đầu file test.
+
+`./gradlew testDebugUnitTest` chạy test JVM của phần đánh giá (`EvalTest`), kèm một workbook mẫu
+ở `app/build/eval-test/`.

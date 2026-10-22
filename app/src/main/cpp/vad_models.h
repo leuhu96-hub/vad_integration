@@ -79,11 +79,16 @@ private:
     int64_t sr_ = kTargetSampleRate;
 };
 
-// YAMNet (AudioSet, 521 classes): 0.96 s patches every 0.48 s. Speech probability is the
-// max over the speech classes (Speech, Child speech, Conversation, Narration).
-// Two graph flavours are supported:
+// After Finish(), track() holds one probability per hop-sized slot (not per window): each slot
+// is the triangle-weighted average of the windows covering it, centred at (k + 0.5) * hop.
+//
+// YAMNet-based speech detector: a 0.96 s window (15360 samples, mono 16 kHz) slides with a
+// 0.08 s hop; each window yields one speech probability (see AppendScores for the accepted
+// output layouts). Legacy graphs are still supported:
 //  - dynamic waveform [N] -> scores [frames, 521] (tf2onnx export): run on long chunks;
-//  - fixed waveform [15600] -> scores [1, 521] (TF-Hub TFLite): slide one patch at a time.
+//    the graph itself frames the audio with a fixed 0.48 s hop (kGraphHop), speech
+//    probability is the max over Speech/Child speech/Conversation/Narration;
+//  - fixed waveform [N] -> scores [1, 521] (TF-Hub TFLite): same sliding scheme as above.
 class YamnetModel : public VadModel {
 public:
     explicit YamnetModel(std::unique_ptr<InferenceSession> s);
@@ -91,16 +96,20 @@ public:
     void Finish() override;
 
     static constexpr int kPatch = 15360;  // 0.96 s of spectrogram frames
-    static constexpr int kHop = 7680;     // 0.48 s
+    static constexpr int kHop = 1280;     // 0.08 s (fixed-input graphs)
+    static constexpr int kGraphHop = 7680;  // 0.48 s (hop built into whole-waveform graphs)
 
 private:
     static constexpr int kFramesPerRun = 32;
     static constexpr int kNumClasses = 521;
+    void FlushWindows();  // emits the trailing windows (per-window scores)
+    void ToSlots();       // per-window scores -> per-slot probabilities (triangle-weighted)
     void RunDynamic(size_t num_samples);
     void RunFixed(const float* window);
     void AppendScores(const OutputTensor& scores);
 
     size_t fixed_len_ = 0;    // >0: graph takes exactly this many samples
+    bool batched_ = false;    // fixed input is [1, N] rather than [N]
     std::vector<float> pending_;
     size_t pending_start_ = 0;  // absolute sample index of pending_[0]
     size_t total_samples_ = 0;

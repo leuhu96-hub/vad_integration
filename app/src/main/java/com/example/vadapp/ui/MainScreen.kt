@@ -4,7 +4,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,8 +22,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DeveloperMode
 import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -32,26 +35,27 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VideoLibrary
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -64,6 +68,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -87,7 +92,7 @@ private const val DETAIL_WINDOW_SEC = 20f
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen(vm: MainViewModel) {
+fun MainScreen(vm: MainViewModel, onOpenDev: () -> Unit) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     val pb by vm.playback.collectAsStateWithLifecycle()
     var showSettings by rememberSaveable { mutableStateOf(false) }
@@ -102,10 +107,38 @@ fun MainScreen(vm: MainViewModel) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("VAD Video") },
+                title = {
+                    Column {
+                        Text("VAD Video", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            ui.videoName ?: "Chưa chọn file",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                },
                 actions = {
-                    IconButton(onClick = { showSettings = !showSettings }) {
+                    ModelMenu(
+                        model = ui.model,
+                        sources = ui.currentSources,
+                        selected = ui.currentSource,
+                        onSelectModel = vm::selectModel,
+                        onSelectSource = vm::selectSource,
+                        onRemove = vm::removeModel,
+                        // Model files have no reliable MIME type, so let the user pick anything;
+                        // the format is detected from the content.
+                        onImport = { modelPicker.launch(arrayOf("*/*")) },
+                    )
+                    IconButton(onClick = onOpenDev) {
+                        Icon(Icons.Filled.DeveloperMode, contentDescription = "Chế độ Dev")
+                    }
+                    IconButton(onClick = { showSettings = true }) {
                         Icon(Icons.Filled.Tune, contentDescription = "Tham số")
+                    }
+                    IconButton(onClick = { picker.launch(arrayOf("video/*", "audio/*")) }) {
+                        Icon(Icons.Filled.VideoLibrary, contentDescription = "Chọn video")
                     }
                 },
             )
@@ -116,112 +149,117 @@ fun MainScreen(vm: MainViewModel) {
                 .padding(padding)
                 .fillMaxSize()
         ) {
-            Column(Modifier.padding(horizontal = 16.dp)) {
-                ModelSelector(ui.model, onSelect = vm::selectModel)
-                ModelSourceRow(
-                    sources = ui.currentSources,
-                    selected = ui.currentSource,
-                    onSelect = vm::selectSource,
-                    onRemove = vm::removeModel,
-                    // Model files have no reliable MIME type, so let the user pick anything;
-                    // the format is detected from the content.
-                    onImport = { modelPicker.launch(arrayOf("*/*")) },
-                )
-                Spacer(Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Button(onClick = { picker.launch(arrayOf("video/*", "audio/*")) }) {
-                        Icon(Icons.Filled.VideoLibrary, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Chọn video")
-                    }
-                    Spacer(Modifier.width(12.dp))
-                    Text(
-                        ui.videoName ?: "Chưa chọn file",
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
-            }
-
             if (ui.videoUri != null) {
                 VideoSurface(vm, pb.videoAspect)
                 PlayerSection(ui, pb, vm)
             }
 
-            LazyColumnBody(ui, pb, vm, showSettings)
+            LazyColumnBody(ui, pb, vm, onPickVideo = { picker.launch(arrayOf("video/*", "audio/*")) })
+        }
+    }
+
+    if (showSettings) {
+        ModalBottomSheet(
+            onDismissRequest = { showSettings = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
+            SettingsPanel(
+                ui.model, ui.currentSettings, vm::updateSettings, vm::resetSettings,
+                Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp)
+                    .padding(bottom = 24.dp),
+            )
         }
     }
 }
 
 @Composable
-private fun ModelSelector(selected: VadModelType, onSelect: (VadModelType) -> Unit) {
-    val models = VadModelType.entries
-    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-        models.forEachIndexed { i, m ->
-            SegmentedButton(
-                selected = m == selected,
-                onClick = { onSelect(m) },
-                shape = SegmentedButtonDefaults.itemShape(i, models.size),
-            ) { Text(m.label) }
+private fun ModelMenu(
+    model: VadModelType,
+    sources: List<ModelSource>,
+    selected: ModelSource?,
+    onSelectModel: (VadModelType) -> Unit,
+    onSelectSource: (ModelSource) -> Unit,
+    onRemove: (ModelSource) -> Unit,
+    onImport: () -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        FilledTonalButton(onClick = { open = true }, contentPadding = PaddingValues(start = 14.dp, end = 6.dp)) {
+            Text(model.label)
+            Icon(Icons.Filled.ArrowDropDown, contentDescription = "Chọn model")
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            MenuHeader("Model")
+            VadModelType.entries.forEach { m ->
+                DropdownMenuItem(
+                    text = { Text(m.label) },
+                    leadingIcon = { CheckSlot(m == model) },
+                    onClick = { onSelectModel(m) },
+                )
+            }
+            Text(
+                model.description,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .widthIn(max = 260.dp)
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+            MenuHeader("File model · ${model.label}")
+            if (sources.isEmpty()) {
+                Text(
+                    "chưa có file",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
+            sources.forEach { src ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            if (src.custom) "${src.fileName} · ${src.format.label}" else src.label,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                    leadingIcon = { CheckSlot(src == selected) },
+                    trailingIcon = if (src.custom) {
+                        {
+                            IconButton(onClick = { onRemove(src) }) {
+                                Icon(Icons.Filled.Close, contentDescription = "Xóa ${src.fileName}")
+                            }
+                        }
+                    } else null,
+                    onClick = { onSelectSource(src); open = false },
+                )
+            }
+            DropdownMenuItem(
+                text = { Text("Nạp .onnx / .tflite…") },
+                leadingIcon = { Icon(Icons.Filled.FileOpen, contentDescription = null) },
+                onClick = { open = false; onImport() },
+            )
         }
     }
+}
+
+@Composable
+private fun MenuHeader(text: String) {
     Text(
-        selected.description,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(top = 4.dp),
+        text,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
     )
 }
 
 @Composable
-private fun ModelSourceRow(
-    sources: List<ModelSource>,
-    selected: ModelSource?,
-    onSelect: (ModelSource) -> Unit,
-    onRemove: (ModelSource) -> Unit,
-    onImport: () -> Unit,
-) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text("Model:", style = MaterialTheme.typography.labelMedium)
-        if (sources.isEmpty()) {
-            Text(
-                "chưa có file",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.error,
-            )
-        }
-        sources.forEach { src ->
-            FilterChip(
-                selected = src == selected,
-                onClick = { onSelect(src) },
-                label = { Text(if (src.custom) "${src.fileName} · ${src.format.label}" else src.label) },
-                trailingIcon = if (src.custom) {
-                    {
-                        Icon(
-                            Icons.Filled.Close,
-                            contentDescription = "Xóa ${src.fileName}",
-                            modifier = Modifier
-                                .size(18.dp)
-                                .clickable { onRemove(src) },
-                        )
-                    }
-                } else null,
-            )
-        }
-        AssistChip(
-            onClick = onImport,
-            label = { Text("Nạp .onnx/.tflite") },
-            leadingIcon = { Icon(Icons.Filled.FileOpen, contentDescription = null, Modifier.size(18.dp)) },
-        )
-    }
+private fun CheckSlot(checked: Boolean) {
+    if (checked) Icon(Icons.Filled.Check, contentDescription = "Đang chọn")
+    else Spacer(Modifier.size(24.dp))
 }
 
 @androidx.annotation.OptIn(UnstableApi::class)
@@ -280,21 +318,6 @@ private fun PlayerSection(ui: UiState, pb: PlaybackState, vm: MainViewModel) {
             Switch(checked = pb.speechOnly, onCheckedChange = vm::setSpeechOnly)
         }
 
-        // Overview of the whole file.
-        Timeline(
-            result = ui.result,
-            segments = ui.segments,
-            threshold = ui.currentSettings.threshold,
-            viewStartSec = 0f,
-            viewEndSec = durationSec,
-            positionSec = positionSec,
-            highlightSegment = pb.currentSegment,
-            onSeek = { vm.seekTo((it * 1000).toLong()) },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(44.dp),
-        )
-        Spacer(Modifier.height(6.dp))
         // Detail view that follows the playhead, for precise seeking around boundaries.
         val window = min(DETAIL_WINDOW_SEC, durationSec)
         val viewStart = (positionSec - window / 2).coerceIn(0f, max(0f, durationSec - window))
@@ -348,15 +371,14 @@ private fun PlayerSection(ui: UiState, pb: PlaybackState, vm: MainViewModel) {
 
 @Composable
 private fun androidx.compose.foundation.layout.ColumnScope.LazyColumnBody(
-    ui: UiState, pb: PlaybackState, vm: MainViewModel, showSettings: Boolean,
+    ui: UiState, pb: PlaybackState, vm: MainViewModel, onPickVideo: () -> Unit,
 ) {
     val listState = rememberLazyListState()
-    val headerItems = if (showSettings) 1 else 0
 
     // Keep the segment under the playhead visible while playing.
     LaunchedEffect(pb.currentSegment, pb.isPlaying) {
         if (pb.isPlaying && pb.currentSegment >= 0) {
-            val target = pb.currentSegment + headerItems
+            val target = pb.currentSegment
             val visible = listState.layoutInfo.visibleItemsInfo.map { it.index }
             if (target !in visible) listState.animateScrollToItem(target)
         }
@@ -370,19 +392,27 @@ private fun androidx.compose.foundation.layout.ColumnScope.LazyColumnBody(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        if (showSettings) {
-            item(key = "settings") {
-                SettingsCard(ui.model, ui.currentSettings, vm::updateSettings, vm::resetSettings)
-            }
-        }
         if (ui.videoUri == null) {
             item(key = "hint") {
-                Text(
-                    "Chọn model, rồi chọn một video (hoặc file audio). App sẽ tách audio, " +
-                        "chuyển về 16 kHz mono và tìm các đoạn có tiếng nói.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    Text(
+                        "Chọn model ở thanh trên, rồi chọn một video (hoặc file audio). App sẽ tách audio, " +
+                            "chuyển về 16 kHz mono và tìm các đoạn có tiếng nói.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Button(onClick = onPickVideo) {
+                        Icon(Icons.Filled.VideoLibrary, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Chọn video")
+                    }
+                }
             }
         }
         itemsIndexed(ui.segments, key = { i, s -> "$i-${s.startSec}" }) { i, seg ->
@@ -446,14 +476,15 @@ private fun SegmentRow(
 }
 
 @Composable
-private fun SettingsCard(
+private fun SettingsPanel(
     model: VadModelType,
     settings: SegmentSettings,
     onChange: (SegmentSettings) -> Unit,
     onReset: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp)) {
+    run {
+        Column(modifier) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     "Tham số tách đoạn · ${model.label}",
@@ -471,13 +502,17 @@ private fun SettingsCard(
                 settings.minSpeechMs.toFloat(), 0f..2000f,
             ) { onChange(settings.copy(minSpeechMs = (it / 10).roundToInt() * 10)) }
             LabeledSlider(
-                "Khoảng lặng tối thiểu", "${settings.minSilenceMs} ms",
+                "Lặng tối thiểu", "${settings.minSilenceMs} ms",
                 settings.minSilenceMs.toFloat(), 0f..2000f,
             ) { onChange(settings.copy(minSilenceMs = (it / 10).roundToInt() * 10)) }
             LabeledSlider(
-                "Nới rộng mỗi đầu", "${settings.padMs} ms",
-                settings.padMs.toFloat(), 0f..500f,
-            ) { onChange(settings.copy(padMs = (it / 10).roundToInt() * 10)) }
+                "Pre padding", "${settings.prePadMs} ms",
+                settings.prePadMs.toFloat(), 0f..500f,
+            ) { onChange(settings.copy(prePadMs = (it / 10).roundToInt() * 10)) }
+            LabeledSlider(
+                "Post padding", "${settings.postPadMs} ms",
+                settings.postPadMs.toFloat(), 0f..500f,
+            ) { onChange(settings.copy(postPadMs = (it / 10).roundToInt() * 10)) }
         }
     }
 }
@@ -490,11 +525,18 @@ private fun LabeledSlider(
     range: ClosedFloatingPointRange<Float>,
     onChange: (Float) -> Unit,
 ) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-        Text(valueText, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+    // One compact row: label | slider | value.
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(96.dp))
+        Slider(value = value, onValueChange = onChange, valueRange = range, modifier = Modifier.weight(1f))
+        Text(
+            valueText,
+            style = MaterialTheme.typography.bodySmall,
+            fontFamily = FontFamily.Monospace,
+            textAlign = TextAlign.End,
+            modifier = Modifier.width(60.dp),
+        )
     }
-    Slider(value = value, onValueChange = onChange, valueRange = range)
 }
 
 private fun formatTime(sec: Float): String {

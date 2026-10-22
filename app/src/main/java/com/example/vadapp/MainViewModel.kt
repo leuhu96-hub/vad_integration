@@ -1,7 +1,6 @@
 package com.example.vadapp
 
 import android.app.Application
-import android.content.res.AssetFileDescriptor
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
@@ -15,6 +14,7 @@ import com.example.vadapp.vad.ModelSource
 import com.example.vadapp.vad.NativeVad
 import com.example.vadapp.vad.Segment
 import com.example.vadapp.vad.SegmentSettings
+import com.example.vadapp.vad.SettingsStore
 import com.example.vadapp.vad.VadModelType
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -73,6 +73,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val playback: StateFlow<PlaybackState> = _playback.asStateFlow()
 
     private val registry = ModelRegistry(app)
+    private val settingsStore = SettingsStore(app)
 
     // Results are cached per (video, model, model file) so switching back and forth is instant.
     private val cache = HashMap<AnalysisKey, AnalysisResult>()
@@ -89,6 +90,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         })
         viewModelScope.launch { pollPlayer() }
+        _ui.update { s -> s.copy(settings = VadModelType.entries.associateWith { settingsStore.load(it) }) }
         refreshSources()
     }
 
@@ -157,9 +159,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         analyze()
     }
 
-    fun updateSettings(settings: SegmentSettings) {
-        _ui.update { it.copy(settings = it.settings + (it.model to settings)) }
-        resegment()
+    fun updateSettings(settings: SegmentSettings) = applySettings(_ui.value.model, settings)
+
+    /** Sets (and persists) the settings of any model, e.g. the threshold picked in dev mode. */
+    fun applySettings(model: VadModelType, settings: SegmentSettings) {
+        settingsStore.save(model, settings)
+        _ui.update { it.copy(settings = it.settings + (model to settings)) }
+        if (model == _ui.value.model) resegment()
     }
 
     fun resetSettings() = updateSettings(_ui.value.model.defaults)
@@ -215,21 +221,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun runNative(
         uri: Uri, model: VadModelType, source: ModelSource, keepGoing: () -> Boolean,
-    ): AnalysisResult {
-        val app = getApplication<Application>()
-        val afd = app.contentResolver.openAssetFileDescriptor(uri, "r")
-            ?: error("Không mở được file")
-        return afd.use {
-            val length = if (it.length == AssetFileDescriptor.UNKNOWN_LENGTH) Long.MAX_VALUE else it.length
-            val threads = Runtime.getRuntime().availableProcessors().coerceIn(1, 4)
-            NativeVad.analyze(
-                app.assets, model.id, source.path, model.extraAsset,
-                it.parcelFileDescriptor.fd, it.startOffset, length, threads,
-            ) { p ->
-                _ui.update { s -> s.copy(progress = p) }
-                keepGoing()
-            }
-        }
+    ): AnalysisResult = NativeVad.analyzeUri(getApplication(), uri, model, source) { p ->
+        _ui.update { s -> s.copy(progress = p) }
+        keepGoing()
     }
 
     private fun resegment() {
