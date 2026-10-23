@@ -167,7 +167,8 @@ fun DevScreen(
                 }
                 item(key = "export") {
                     Section("Xuất báo cáo") {
-                        Hint("Tạo vad_dev_report_<ngày>.xlsx (bảng tổng hợp có công thức, sheet Quét ngưỡng, Split, Theo nhóm) và 6 ảnh ROC trong thư mục bạn chọn.")
+                        Hint("Tạo vad_dev_report_<ngày>.xlsx (bảng tổng hợp có công thức, sheet Quét ngưỡng, Split, Theo nhóm) và " +
+                            "${if (st.testOnly) 3 else 6} ảnh ROC trong thư mục bạn chọn.")
                         Button(onClick = { exportPicker.launch(st.videoTree) }, enabled = !st.busy) { Text("Chọn thư mục & xuất") }
                     }
                 }
@@ -241,12 +242,20 @@ private fun <T> ChipRow(label: String, options: List<T>, selected: T, text: (T) 
 }
 
 @Composable
-private fun SplitSection(st: DevState, vm: DevViewModel) = Section("2. Chia dev / test") {
-    SliderRow("Tỷ lệ dev", "${(st.devRatio * 100).roundToInt()}%", st.devRatio, 0.5f..0.9f, steps = 7) {
-        vm.setDevRatio((it * 20).roundToInt() / 20f)
+private fun SplitSection(st: DevState, vm: DevViewModel) = Section("2. Chế độ & chia tập") {
+    ChipRow("Chế độ", listOf(false, true), st.testOnly, { if (it) "Chỉ test (cấu hình user)" else "Chọn tham số (dev → test)" }) {
+        if (!st.busy) vm.setTestOnly(it)
     }
-    Hint("Phân tầng theo quality × category, cân theo thời lượng rồi hoán đổi file để tỷ lệ speech hai tập gần nhau.")
-    FilledTonalButton(onClick = vm::makeSplit, enabled = !st.busy) { Text("Chia lại") }
+    if (st.testOnly) {
+        Hint("Không chia dev: cả ${st.scan?.items?.size ?: 0} file dùng để đánh giá cấu hình hiện tại của user " +
+            "(model, merge, drop, pad) với ngưỡng bạn chọn ở mục 3.")
+    } else {
+        SliderRow("Tỷ lệ dev", "${(st.devRatio * 100).roundToInt()}%", st.devRatio, 0.5f..0.9f, steps = 7) {
+            vm.setDevRatio((it * 20).roundToInt() / 20f)
+        }
+        Hint("Phân tầng theo quality × category, cân theo thời lượng rồi hoán đổi file để tỷ lệ speech hai tập gần nhau.")
+        FilledTonalButton(onClick = vm::makeSplit, enabled = !st.busy) { Text("Chia lại") }
+    }
     if (st.cellStats.isNotEmpty()) {
         val rows = st.cellStats.map { c ->
             listOf(
@@ -302,6 +311,11 @@ private fun ModelsSection(st: DevState, vm: DevViewModel) = Section("3. Model & 
                     }
                 }
                 val s = conf.settings
+                if (st.testOnly) {
+                    SliderRow("Ngưỡng", String.format(Locale.US, "%.2f", s.threshold), s.threshold, 0f..1f, steps = 99) {
+                        vm.setModelSettings(m, s.copy(threshold = (it * 100).roundToInt() / 100f))
+                    }
+                }
                 SliderRow("Merge: lặng ≥", "${s.minSilenceMs} ms", s.minSilenceMs.toFloat(), 0f..2000f) {
                     vm.setModelSettings(m, s.copy(minSilenceMs = (it / 10).roundToInt() * 10))
                 }
@@ -322,7 +336,12 @@ private fun ModelsSection(st: DevState, vm: DevViewModel) = Section("3. Model & 
     }
     Hint("Bin GT ${BIN_SEC}s là speech theo model khi phần speech (sau hậu xử lý) chiếm ≥ tỷ lệ này. " +
         "Kết quả model được cache: chạy lại sau khi đổi tham số chỉ mất thời gian quét ngưỡng.")
-    SearchControls(st, vm)
+    if (st.testOnly) {
+        TextButton(onClick = vm::reloadUserSettings, enabled = !st.busy) { Text("Nạp lại cài đặt user") }
+        Hint("Đổi ngưỡng không cần chạy lại: bảng và ROC cập nhật ngay. Đổi merge/drop/pad hoặc tỷ lệ bin thì cần chạy lại.")
+    } else {
+        SearchControls(st, vm)
+    }
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Button(onClick = vm::run, enabled = !st.busy) { Text(if (st.evals.isEmpty()) "Chạy & đánh giá" else "Chạy lại") }
         if (st.stale) Text("Tham số/split đã đổi – cần chạy lại", color = MaterialTheme.colorScheme.error,
@@ -331,15 +350,17 @@ private fun ModelsSection(st: DevState, vm: DevViewModel) = Section("3. Model & 
 }
 
 @Composable
-private fun ParamsSection(st: DevState, vm: DevViewModel) = Section("4. Chọn ngưỡng") {
+private fun ParamsSection(st: DevState, vm: DevViewModel) = Section(if (st.testOnly) "4. Thông số báo cáo" else "4. Chọn ngưỡng") {
     val p = st.params
-    ChipRow("Tiêu chí (trên dev, strict)", Criterion.entries, p.criterion, { it.label }) { vm.setParams(p.copy(criterion = it)) }
+    if (!st.testOnly) {
+        ChipRow("Tiêu chí (trên dev, strict)", Criterion.entries, p.criterion, { it.label }) { vm.setParams(p.copy(criterion = it)) }
+    }
     ChipRow("Cấu hình hậu xử lý cho tầng B", PostConfig.entries, p.config, { it.code }) { vm.setParams(p.copy(config = it)) }
     Hint(p.config.description)
     SliderRow("Trọng số miss DCF", String.format(Locale.US, "%.2f", p.missWeight), p.missWeight.toFloat(), 0f..1f, steps = 19) {
         vm.setParams(p.copy(missWeight = (it * 20).roundToInt() / 20.0))
     }
-    if (p.criterion == Criterion.MR_MAX) {
+    if (p.criterion == Criterion.MR_MAX && !st.testOnly) {
         SliderRow("MR tối đa", fmtPct(p.mrMax), p.mrMax.toFloat(), 0.01f..0.3f, steps = 28) {
             vm.setParams(p.copy(mrMax = (it * 100).roundToInt() / 100.0))
         }
@@ -350,34 +371,37 @@ private fun ParamsSection(st: DevState, vm: DevViewModel) = Section("4. Chọn n
 
 @Composable
 private fun RocSection(vm: DevViewModel, st: DevState) = Section("5. ROC · cấu hình ${st.params.config.code}") {
-    var set by rememberSaveable { mutableIntStateOf(0) }
+    var chosenSet by rememberSaveable { mutableIntStateOf(0) }
     var mode by rememberSaveable { mutableIntStateOf(0) }
-    ChipRow("Tập", listOf(0, 1), set, { if (it == 0) "Dev" else "Test" }) { set = it }
+    val set = if (st.testOnly) 1 else chosenSet
+    if (!st.testOnly) ChipRow("Tập", listOf(0, 1), chosenSet, { if (it == 0) "Dev" else "Test" }) { chosenSet = it }
     ChipRow("Chế độ", EvalMode.entries.indices.toList(), mode, { EvalMode.entries[it].label }) { mode = it }
     // st is read so the chart recomposes when summaries change.
     val series = remember(st.summaries, st.params, set, mode) { vm.rocSeries(set, EvalMode.entries[mode]) }
     RocChart(series, Modifier.fillMaxWidth().widthIn(max = 520.dp).aspectRatio(0.85f))
-    Hint("Chấm tròn = điểm làm việc tại ngưỡng đã chọn.")
+    Hint(if (st.testOnly) "Quét ngưỡng với merge/drop/pad cố định; chấm tròn = cấu hình với ngưỡng bạn chọn."
+        else "Chấm tròn = điểm làm việc tại ngưỡng đã chọn.")
 }
 
 @Composable
 private fun CompareSection(st: DevState) = Section("6. So sánh model") {
     val c = st.params.config.ordinal
     val series = st.summaries.map { "${it.model.label}" to modelColor(it.model) }
-    Text("AUC theo chế độ (dev · test), cấu hình ${st.params.config.code}", style = MaterialTheme.typography.labelLarge)
+    val sets = if (st.testOnly) listOf(1) else listOf(0, 1)
+    Text("AUC theo chế độ (${if (st.testOnly) "test" else "dev · test"}), cấu hình ${st.params.config.code}",
+        style = MaterialTheme.typography.labelLarge)
     GroupedBarChart(
-        groups = EvalMode.entries.flatMap { listOf("${it.short} dev", "${it.short} test") },
+        groups = EvalMode.entries.flatMap { m -> sets.map { "${m.short} ${if (it == 0) "dev" else "test"}" } },
         series = series,
         values = EvalMode.entries.flatMap { m ->
-            listOf(
-                st.summaries.map { it.rows[c].aucDev[m.ordinal] },
-                st.summaries.map { it.rows[c].aucTest[m.ordinal] },
-            )
+            sets.map { set ->
+                st.summaries.map { (if (set == 0) it.rows[c].aucDev else it.rows[c].aucTest)[m.ordinal] }
+            }
         },
         maxValue = 1.0, format = { String.format(Locale.US, "%.2f", it) },
         modifier = Modifier.fillMaxWidth().height(200.dp),
     )
-    Text("Test, strict, tại ngưỡng đã chọn", style = MaterialTheme.typography.labelLarge)
+    Text(if (st.testOnly) "Test, strict, tại ngưỡng của từng model" else "Test, strict, tại ngưỡng đã chọn", style = MaterialTheme.typography.labelLarge)
     GroupedBarChart(
         groups = listOf("F1", "MR", "FAR", "DCF"),
         series = series,
@@ -399,7 +423,8 @@ private fun SummarySection(ms: ModelSummary, st: DevState, onApply: (VadModelTyp
     Section("7. ${ms.model.label} · ${ms.eval.source.fileName}") {
         if (ms.eval.failed > 0) Text("${ms.eval.failed} file không phân tích được (bỏ qua)",
             color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
-        ModelSummaryTables(ms, st.params)
+        ModelSummaryTables(ms, st.params, st.testOnly)
+        if (st.testOnly) return@Section
         val apply = ms.applicableSettings()
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { apply?.let { onApply(ms.model, it) } }, enabled = apply != null && !st.stale) {

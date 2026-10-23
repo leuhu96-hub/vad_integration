@@ -22,6 +22,7 @@ import com.example.vadapp.vad.eval.EvalMode
 import com.example.vadapp.vad.eval.Metrics
 import com.example.vadapp.vad.eval.ModelEval
 import com.example.vadapp.vad.eval.ModelSummary
+import com.example.vadapp.vad.eval.NUM_THR
 import com.example.vadapp.vad.eval.ParamSearch
 import com.example.vadapp.vad.eval.PostConfig
 import com.example.vadapp.vad.eval.SearchGrid
@@ -80,6 +81,11 @@ data class DevState(
     val summaries: List<ModelSummary> = emptyList(),
     /** Grid-search merge/drop/pad on dev before the sweep (config A5). */
     val searchEnabled: Boolean = false,
+    /**
+     * Test-only mode: every matched file is a test file and each model is evaluated with the
+     * user's saved settings (threshold chosen here) instead of selecting parameters on dev.
+     */
+    val testOnly: Boolean = false,
     val grid: SearchGrid = SearchGrid(),
     val message: String? = null,
     val error: String? = null,
@@ -107,6 +113,7 @@ class DevViewModel(app: Application) : AndroidViewModel(app) {
                     DevModelConf(sources[m].orEmpty().isNotEmpty(), sources[m]?.firstOrNull(), user.load(m))
                 },
                 searchEnabled = prefs.getBoolean("searchEnabled", false),
+                testOnly = prefs.getBoolean("testOnly", false),
                 grid = loadGrid(),
             )
         }
@@ -143,10 +150,27 @@ class DevViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(devRatio = r) }
     }
 
+    fun setTestOnly(enabled: Boolean) {
+        prefs.edit().putBoolean("testOnly", enabled).apply()
+        _state.update { it.copy(testOnly = enabled, evals = emptyList(), summaries = emptyList(), stale = false) }
+        if (enabled) reloadUserSettings()
+        makeSplit()
+    }
+
+    /** Takes each model's settings (threshold, merge, drop, pad) from what the user has saved. */
+    fun reloadUserSettings() {
+        val user = SettingsStore(getApplication())
+        _state.update { s ->
+            val models = s.models.mapValues { (m, c) -> c.copy(settings = user.load(m)) }
+            s.copy(models = models).let { it.copy(summaries = summarize(it, it.evals, it.params)) }
+        }
+    }
+
     fun makeSplit() {
         val s = _state.value
         val items = s.scan?.items ?: return
-        val split = Splitter.split(items, s.devRatio)
+        // Test-only: no dev set, every file is evaluated.
+        val split = if (s.testOnly) Split(0f, BooleanArray(items.size)) else Splitter.split(items, s.devRatio)
         _state.update {
             it.copy(split = split, cellStats = Splitter.stats(items, split), stale = it.evals.isNotEmpty())
         }
@@ -156,7 +180,27 @@ class DevViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setModelEnabled(m: VadModelType, enabled: Boolean) = updateModel(m) { copy(enabled = enabled) }
     fun setModelSource(m: VadModelType, src: ModelSource) = updateModel(m) { copy(source = src) }
-    fun setModelSettings(m: VadModelType, st: SegmentSettings) = updateModel(m) { copy(settings = st) }
+    fun setModelSettings(m: VadModelType, st: SegmentSettings) {
+        val old = _state.value.models[m]?.settings
+        // In test-only mode the threshold only picks a point of the existing sweep: no re-run.
+        if (_state.value.testOnly && old != null && old.copy(threshold = st.threshold) == st) {
+            _state.update { s ->
+                val models = s.models + (m to s.models.getValue(m).copy(settings = st))
+                s.copy(models = models).let { it.copy(summaries = summarize(it, it.evals, it.params)) }
+            }
+            return
+        }
+        updateModel(m) { copy(settings = st) }
+    }
+
+    /** Summaries for [evals]; in test-only mode with each model's own threshold. */
+    private fun summarize(st: DevState, evals: List<ModelEval>, p: SelectParams): List<ModelSummary> {
+        val items = st.scan?.items.orEmpty()
+        return evals.map { e ->
+            val fixed = if (st.testOnly) (st.models[e.model]?.settings?.threshold?.let { Math.round(it * 100) }) else null
+            ModelSummary.compute(e, items, p, fixed?.coerceIn(0, NUM_THR - 1))
+        }
+    }
 
     private fun updateModel(m: VadModelType, f: DevModelConf.() -> DevModelConf) {
         _state.update { s ->
@@ -198,10 +242,7 @@ class DevViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setParams(p: SelectParams) {
-        _state.update { s ->
-            val items = s.scan?.items.orEmpty()
-            s.copy(params = p, summaries = s.evals.map { ModelSummary.compute(it, items, p) })
-        }
+        _state.update { s -> s.copy(params = p, summaries = summarize(s, s.evals, p)) }
     }
 
     fun clearCache() {
@@ -261,7 +302,7 @@ class DevViewModel(app: Application) : AndroidViewModel(app) {
             val params = _state.value.params
             val devIdx = split.devIndices()
             val searches = HashMap<VadModelType, SearchResult>()
-            if (s.searchEnabled && s.grid.size > 0) {
+            if (s.searchEnabled && !s.testOnly && s.grid.size > 0) {
                 for ((mi, entry) in models.entries.withIndex()) {
                     val (m, conf) = entry
                     val src = conf.source!!
@@ -311,7 +352,9 @@ class DevViewModel(app: Application) : AndroidViewModel(app) {
             }
             // After a search, report the tuned configuration by default.
             if (searches.isNotEmpty()) _state.update { it.copy(params = it.params.copy(config = PostConfig.A5)) }
-            val summaries = evals.map { ModelSummary.compute(it, items, _state.value.params) }
+            // Test-only reports the user's own pipeline.
+            if (s.testOnly) _state.update { it.copy(params = it.params.copy(config = PostConfig.A4)) }
+            val summaries = summarize(_state.value, evals, _state.value.params)
             _state.update {
                 it.copy(
                     evals = evals, summaries = summaries, stale = false,
@@ -381,6 +424,7 @@ class DevViewModel(app: Application) : AndroidViewModel(app) {
         val split = s.split ?: return
         if (s.summaries.isEmpty()) return
         val app = getApplication<Application>()
+        val sets = if (s.testOnly) listOf(1) else listOf(0, 1)
         launchBusy("Đang xuất báo cáo…") {
             withContext(Dispatchers.IO) {
                 val resolver = app.contentResolver
@@ -396,10 +440,10 @@ class DevViewModel(app: Application) : AndroidViewModel(app) {
                     XlsxReport(
                         items, split, s.summaries, s.params, s.binRatio,
                         s.videoTree?.let(DatasetScanner::treeName).orEmpty(),
-                        s.gtTree?.let(DatasetScanner::treeName).orEmpty(), date,
+                        s.gtTree?.let(DatasetScanner::treeName).orEmpty(), date, s.testOnly,
                     ).write(out)
                 }
-                for (set in 0..1) for (mode in EvalMode.entries) {
+                for (set in sets) for (mode in EvalMode.entries) {
                     val setName = if (set == 0) "dev" else "test"
                     val bmp = renderRocBitmap("ROC $setName · ${mode.label} · ${s.params.config.code}", rocSeries(set, mode))
                     val png = create("image/png", "roc_${stamp}_${setName}_${mode.short}.png")
@@ -407,7 +451,7 @@ class DevViewModel(app: Application) : AndroidViewModel(app) {
                     bmp.recycle()
                 }
             }
-            _state.update { it.copy(message = "Đã xuất vad_dev_report_*.xlsx và 6 ảnh ROC") }
+            _state.update { it.copy(message = "Đã xuất vad_dev_report_*.xlsx và ${sets.size * EvalMode.entries.size} ảnh ROC") }
         }
     }
 }

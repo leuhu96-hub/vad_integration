@@ -74,27 +74,46 @@ private fun Cell(text: String, width: Dp, bold: Boolean = false, start: Boolean 
 
 /** Tables A (threshold choice on dev) and B (test, three modes) of one model. */
 @Composable
-fun ModelSummaryTables(ms: ModelSummary, params: SelectParams) {
+fun ModelSummaryTables(ms: ModelSummary, params: SelectParams, testOnly: Boolean = false) {
     Column {
-        Text("A. Chọn ngưỡng trên dev (strict)", style = MaterialTheme.typography.labelLarge)
-        DataTable(
-            header = listOf(
-                "Cấu hình", "Ngưỡng DCF-min", "DCF min", "Ngưỡng F1-max", "F1 max", "Ngưỡng Youden",
-                "Ngưỡng EER", "Ngưỡng MR≤x", "AUC dev", "AUC test", "AUC chính xác dev/test",
-                "TPR@FPR ${fmtPct(params.fpr1)}", "TPR@FPR ${fmtPct(params.fpr2)}", "Ngưỡng dùng",
-            ),
-            rows = ms.rows.map { r ->
-                listOf(
-                    "${r.config.code} · ${ms.eval.describe(r.config)}", fmtThr(r.thrDcf), fmt3(r.dcfMin), fmtThr(r.thrF1),
-                    fmt3(r.f1Max), fmtThr(r.thrYouden), fmtThr(r.thrEer), fmtThr(r.thrMr), fmt3(r.aucDev[0]),
-                    fmt3(r.aucTest[0]),
-                    if (r.config == PostConfig.A0) "${fmt3(r.exactAucDev[0])} / ${fmt3(r.exactAucTest[0])}" else "",
-                    fmtPct(r.tprFpr1), fmtPct(r.tprFpr2), fmtThr(r.used),
-                )
-            },
-            firstColWidth = 190.dp,
-            highlightRow = params.config.ordinal,
-        )
+        if (testOnly) {
+            Text("A. ROC/AUC trên test (quét ngưỡng với merge/drop/pad cố định)", style = MaterialTheme.typography.labelLarge)
+            DataTable(
+                header = listOf(
+                    "Cấu hình", "AUC strict", "AUC collar", "AUC chỉ biên", "AUC chính xác (strict)",
+                    "TPR@FPR ${fmtPct(params.fpr1)}", "TPR@FPR ${fmtPct(params.fpr2)}",
+                ),
+                rows = ms.rows.map { r ->
+                    listOf(
+                        "${r.config.code} · ${ms.eval.describe(r.config)}", fmt3(r.aucTest[0]), fmt3(r.aucTest[1]),
+                        fmt3(r.aucTest[2]), if (r.config == PostConfig.A0) fmt3(r.exactAucTest[0]) else "",
+                        fmtPct(r.tprFpr1Test), fmtPct(r.tprFpr2Test),
+                    )
+                },
+                firstColWidth = 190.dp,
+                highlightRow = params.config.ordinal,
+            )
+        } else {
+            Text("A. Chọn ngưỡng trên dev (strict)", style = MaterialTheme.typography.labelLarge)
+            DataTable(
+                header = listOf(
+                    "Cấu hình", "Ngưỡng DCF-min", "DCF min", "Ngưỡng F1-max", "F1 max", "Ngưỡng Youden",
+                    "Ngưỡng EER", "Ngưỡng MR≤x", "AUC dev", "AUC test", "AUC chính xác dev/test",
+                    "TPR@FPR ${fmtPct(params.fpr1)}", "TPR@FPR ${fmtPct(params.fpr2)}", "Ngưỡng dùng",
+                ),
+                rows = ms.rows.map { r ->
+                    listOf(
+                        "${r.config.code} · ${ms.eval.describe(r.config)}", fmtThr(r.thrDcf), fmt3(r.dcfMin), fmtThr(r.thrF1),
+                        fmt3(r.f1Max), fmtThr(r.thrYouden), fmtThr(r.thrEer), fmtThr(r.thrMr), fmt3(r.aucDev[0]),
+                        fmt3(r.aucTest[0]),
+                        if (r.config == PostConfig.A0) "${fmt3(r.exactAucDev[0])} / ${fmt3(r.exactAucTest[0])}" else "",
+                        fmtPct(r.tprFpr1), fmtPct(r.tprFpr2), fmtThr(r.used),
+                    )
+                },
+                firstColWidth = 190.dp,
+                highlightRow = params.config.ordinal,
+            )
+        }
         Text(
             "B. Test · cấu hình ${ms.config.code} · ngưỡng ${fmtThr(ms.usedK)}",
             style = MaterialTheme.typography.labelLarge,

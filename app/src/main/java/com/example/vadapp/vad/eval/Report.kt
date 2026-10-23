@@ -54,6 +54,8 @@ class ConfigRow(
     /** Only for A0 (threshold-free), NaN otherwise. */
     val exactAucDev: DoubleArray, val exactAucTest: DoubleArray,
     val tprFpr1: Double, val tprFpr2: Double,
+    /** Same on the test set (used by the test-only report). */
+    val tprFpr1Test: Double, val tprFpr2Test: Double,
     val used: Int,
 )
 
@@ -86,7 +88,8 @@ class ModelSummary(
     companion object {
         val CI_METRICS = listOf("F1", "DCF", "MR", "FAR")
 
-        fun compute(e: ModelEval, items: List<EvalItem>, p: SelectParams): ModelSummary {
+        /** [fixedK]: test-only mode, threshold index fixed by the user instead of chosen on dev. */
+        fun compute(e: ModelEval, items: List<EvalItem>, p: SelectParams, fixedK: Int? = null): ModelSummary {
             val strict = EvalMode.STRICT.ordinal
             val rows = PostConfig.entries.map { cfg ->
                 val c = cfg.ordinal
@@ -107,7 +110,9 @@ class ModelSummary(
                     exactAucTest = if (cfg == PostConfig.A0) e.exactAucTest else DoubleArray(3) { Double.NaN },
                     tprFpr1 = Metrics.tprAtFar(e.devSweep, c, strict, p.fpr1),
                     tprFpr2 = Metrics.tprAtFar(e.devSweep, c, strict, p.fpr2),
-                    used = sel(p.criterion),
+                    tprFpr1Test = Metrics.tprAtFar(e.testSweep, c, strict, p.fpr1),
+                    tprFpr2Test = Metrics.tprAtFar(e.testSweep, c, strict, p.fpr2),
+                    used = fixedK ?: sel(p.criterion),
                 )
             }
             val c = p.config.ordinal

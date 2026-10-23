@@ -22,6 +22,8 @@ class XlsxReport(
     private val videoRoot: String,
     private val gtRoot: String,
     private val date: String,
+    /** Test-only mode: thresholds come from the user (yellow cells), no selection on dev. */
+    private val testOnly: Boolean = false,
 ) {
     private val sum = "'Tổng hợp'!"
     private val sw = "'Quét ngưỡng'!"
@@ -66,7 +68,8 @@ class XlsxReport(
         s.width(0, 34.0); s.width(1, 30.0)
         for (c in 2..17) s.width(c, 13.0)
         val nDev = split.isDev.count { it }
-        s.str(1, 0, "Kết quả đánh giá VAD trên bộ dữ liệu có ground truth – chỉ số tính bằng công thức", Style.TITLE)
+        s.str(1, 0, (if (testOnly) "Kết quả test cấu hình user" else "Kết quả đánh giá VAD trên bộ dữ liệu có ground truth") +
+            " – chỉ số tính bằng công thức", Style.TITLE)
         s.str(2, 0, "Nguồn: video \"$videoRoot\", GT \"$gtRoot\", chạy $date trên thiết bị. ${items.size} file " +
             "(dev $nDev / test ${items.size - nDev}, tỷ lệ dev ${pct(split.devRatio.toDouble())}), bin GT ${BIN_SEC}s, " +
             "bin là speech khi ≥ ${pct(binRatio.toDouble())} thời lượng có speech.", Style.NOTE)
@@ -78,7 +81,8 @@ class XlsxReport(
         s.str(6, 0, "Trọng số miss trong DCF (FA = 1 − ô này)"); s.num(6, 1, params.missWeight, Style.PARAM_DEC2)
         s.str(7, 0, "Cấu hình hậu xử lý cho tầng B"); s.str(7, 1, params.config.code, Style.PARAM)
         s.listValidation("B7", configs.map { it.code })
-        s.str(8, 0, "Tiêu chí chọn ngưỡng trên dev"); s.str(8, 1, params.criterion.excel, Style.PARAM)
+        s.str(8, 0, if (testOnly) "Tiêu chí chọn ngưỡng (không dùng: ngưỡng do user chọn)" else "Tiêu chí chọn ngưỡng trên dev")
+        s.str(8, 1, params.criterion.excel, Style.PARAM)
         s.listValidation("B8", Criterion.entries.map { it.excel })
         s.str(9, 0, "Mốc FPR 1 (TPR@FPR)"); s.num(9, 1, params.fpr1, Style.PARAM_PCT)
         s.str(10, 0, "Mốc FPR 2 (TPR@FPR)"); s.num(10, 1, params.fpr2, Style.PARAM_PCT)
@@ -102,50 +106,60 @@ class XlsxReport(
                 (if (e.failed > 0) "; ${e.failed} file lỗi bị bỏ qua" else ""), Style.SECTION)
             val usedRow = r + 1
             val aFirst = r + 7
-            s.str(usedRow, 0, "Ngưỡng dùng (tự chọn trên dev theo B7, B8)")
-            s.formula(usedRow, 1, "IFERROR(INDEX(\$Q\$$aFirst:\$Q\$${aFirst + configs.size - 1},$pCfgIdx+1),\"\")", Style.DEC2)
+            if (testOnly) {
+                s.str(usedRow, 0, "Ngưỡng dùng (cấu hình user, sửa được)")
+                s.num(usedRow, 1, ms.thresholdExact, Style.PARAM_DEC2)
+            } else {
+                s.str(usedRow, 0, "Ngưỡng dùng (tự chọn trên dev theo B7, B8)")
+                s.formula(usedRow, 1, "IFERROR(INDEX(\$Q\$$aFirst:\$Q\$${aFirst + configs.size - 1},$pCfgIdx+1),\"\")", Style.DEC2)
+            }
             s.str(r + 2, 0, "Ngưỡng app đã dùng cho CI, theo nhóm, hình")
             s.num(r + 2, 1, ms.thresholdExact, Style.BLUE_DEC2)
             s.str(r + 3, 0, "Kiểm tra")
-            s.formula(r + 3, 1, "IF(AND($pConfig=$pAppCfg,$pCrit=$pAppCrit,$pWeight=$pAppWeight,B$usedRow<>\"\"," +
+            val critCheck = if (testOnly) "" else "$pCrit=$pAppCrit,"
+            s.formula(r + 3, 1, "IF(AND($pConfig=$pAppCfg,$critCheck$pWeight=$pAppWeight,B$usedRow<>\"\"," +
                 "ROUND(N(B$usedRow),2)=ROUND(N(B${r + 2}),2)),\"Khớp\",\"Lệch – CI/nhóm/hình theo app chưa cập nhật\")", Style.BOLD)
             usedCellOf[m] = "B$usedRow"
 
             // ---- A
-            s.str(r + 5, 0, "A. Chọn ngưỡng trên dev (strict, qua toàn pipeline; DCF theo trọng số B6)", Style.BOLD)
-            val headA = listOf(
-                "Cấu hình", "Mô tả", "Ngưỡng DCF-min (dev)", "DCF min (dev)", "Ngưỡng F1-max (dev)", "F1 max (dev)",
-                "Ngưỡng Youden (dev)", "J max (dev)", "Ngưỡng EER (dev)", "Ngưỡng MR<=x (dev)", "AUC dev (lưới ngưỡng)",
-                "AUC test (lưới ngưỡng)", "AUC chính xác dev", "AUC chính xác test", "TPR@FPR1 (dev)", "TPR@FPR2 (dev)",
-                "Ngưỡng dùng (theo B8)",
-            )
-            headA.forEachIndexed { c, h -> s.str(r + 6, c, h, Style.HEADER) }
             tableARowOf[m] = aFirst
-            configs.forEachIndexed { c, cfg ->
-                val row = aFirst + c
-                val r0 = blockRow(m, 0, 0, c)
-                val r1 = r0 + NUM_THR - 1
-                fun rng(col: String) = "$sw\$$col\$$r0:\$$col\$$r1"
-                fun argOpt(fn: String, col: String) =
-                    "IF(COUNT(${rng(col)})=0,\"\",INDEX(${rng("E")},MATCH($fn(${rng(col)}),${rng(col)},0)))"
-                val row0 = ms.rows[c]
-                s.str(row, 0, cfg.code)
-                s.str(row, 1, e.describe(cfg))
-                s.formula(row, 2, argOpt("MIN", "P"), Style.DEC2)
-                s.formula(row, 3, "IF(COUNT(${rng("P")})=0,\"\",MIN(${rng("P")}))", Style.DEC3)
-                s.formula(row, 4, argOpt("MAX", "N"), Style.DEC2)
-                s.formula(row, 5, "IF(COUNT(${rng("N")})=0,\"\",MAX(${rng("N")}))", Style.DEC3)
-                s.formula(row, 6, argOpt("MAX", "Q"), Style.DEC2)
-                s.formula(row, 7, "IF(COUNT(${rng("Q")})=0,\"\",MAX(${rng("Q")}))", Style.DEC3)
-                s.formula(row, 8, argOpt("MIN", "R"), Style.DEC2)
-                s.formula(row, 9, argOpt("MIN", "S"), Style.DEC2)
-                s.num(row, 10, row0.aucDev[0], Style.BLUE_DEC3)
-                s.num(row, 11, row0.aucTest[0], Style.BLUE_DEC3)
-                s.num(row, 12, row0.exactAucDev[0], Style.BLUE_DEC3)
-                s.num(row, 13, row0.exactAucTest[0], Style.BLUE_DEC3)
-                s.formula(row, 14, "IFERROR(SUMPRODUCT(MAX((${rng("K")}<=$pFpr1)*${rng("M")})),\"\")", Style.PCT)
-                s.formula(row, 15, "IFERROR(SUMPRODUCT(MAX((${rng("K")}<=$pFpr2)*${rng("M")})),\"\")", Style.PCT)
-                s.formula(row, 16, "IFERROR(CHOOSE(MATCH($pCrit,{$critList},0),C$row,E$row,G$row,I$row,J$row),\"\")", Style.DEC2)
+            if (testOnly) {
+                writeTestOnlyTableA(s, m, ms, r + 5, aFirst)
+            } else {
+                s.str(r + 5, 0, "A. Chọn ngưỡng trên dev (strict, qua toàn pipeline; DCF theo trọng số B6)", Style.BOLD)
+                val headA = listOf(
+                    "Cấu hình", "Mô tả", "Ngưỡng DCF-min (dev)", "DCF min (dev)", "Ngưỡng F1-max (dev)", "F1 max (dev)",
+                    "Ngưỡng Youden (dev)", "J max (dev)", "Ngưỡng EER (dev)", "Ngưỡng MR<=x (dev)", "AUC dev (lưới ngưỡng)",
+                    "AUC test (lưới ngưỡng)", "AUC chính xác dev", "AUC chính xác test", "TPR@FPR1 (dev)", "TPR@FPR2 (dev)",
+                    "Ngưỡng dùng (theo B8)",
+                )
+                headA.forEachIndexed { c, h -> s.str(r + 6, c, h, Style.HEADER) }
+                configs.forEachIndexed { c, cfg ->
+                    val row = aFirst + c
+                    val r0 = blockRow(m, 0, 0, c)
+                    val r1 = r0 + NUM_THR - 1
+                    fun rng(col: String) = "$sw\$$col\$$r0:\$$col\$$r1"
+                    fun argOpt(fn: String, col: String) =
+                        "IF(COUNT(${rng(col)})=0,\"\",INDEX(${rng("E")},MATCH($fn(${rng(col)}),${rng(col)},0)))"
+                    val row0 = ms.rows[c]
+                    s.str(row, 0, cfg.code)
+                    s.str(row, 1, e.describe(cfg))
+                    s.formula(row, 2, argOpt("MIN", "P"), Style.DEC2)
+                    s.formula(row, 3, "IF(COUNT(${rng("P")})=0,\"\",MIN(${rng("P")}))", Style.DEC3)
+                    s.formula(row, 4, argOpt("MAX", "N"), Style.DEC2)
+                    s.formula(row, 5, "IF(COUNT(${rng("N")})=0,\"\",MAX(${rng("N")}))", Style.DEC3)
+                    s.formula(row, 6, argOpt("MAX", "Q"), Style.DEC2)
+                    s.formula(row, 7, "IF(COUNT(${rng("Q")})=0,\"\",MAX(${rng("Q")}))", Style.DEC3)
+                    s.formula(row, 8, argOpt("MIN", "R"), Style.DEC2)
+                    s.formula(row, 9, argOpt("MIN", "S"), Style.DEC2)
+                    s.num(row, 10, row0.aucDev[0], Style.BLUE_DEC3)
+                    s.num(row, 11, row0.aucTest[0], Style.BLUE_DEC3)
+                    s.num(row, 12, row0.exactAucDev[0], Style.BLUE_DEC3)
+                    s.num(row, 13, row0.exactAucTest[0], Style.BLUE_DEC3)
+                    s.formula(row, 14, "IFERROR(SUMPRODUCT(MAX((${rng("K")}<=$pFpr1)*${rng("M")})),\"\")", Style.PCT)
+                    s.formula(row, 15, "IFERROR(SUMPRODUCT(MAX((${rng("K")}<=$pFpr2)*${rng("M")})),\"\")", Style.PCT)
+                    s.formula(row, 16, "IFERROR(CHOOSE(MATCH($pCrit,{$critList},0),C$row,E$row,G$row,I$row,J$row),\"\")", Style.DEC2)
+                }
             }
 
             // ---- B
@@ -197,8 +211,10 @@ class XlsxReport(
             s.str(row, 1, "${ms.eval.source.fileName} (${ms.eval.source.format.label})")
             s.formula(row, 2, pConfig)
             s.formula(row, 3, usedCellOf.getValue(m), Style.DEC2)
-            s.formula(row, 4, "IFERROR(INDEX(\$K\$$a0:\$K\$${a0 + configs.size - 1},$pCfgIdx+1),\"\")", Style.DEC3)
-            s.formula(row, 5, "IFERROR(INDEX(\$L\$$a0:\$L\$${a0 + configs.size - 1},$pCfgIdx+1),\"\")", Style.DEC3)
+            // Test-only table A has AUC test (strict) in column C and no dev.
+            if (!testOnly) s.formula(row, 4, "IFERROR(INDEX(\$K\$$a0:\$K\$${a0 + configs.size - 1},$pCfgIdx+1),\"\")", Style.DEC3)
+            val aucCol = if (testOnly) "C" else "L"
+            s.formula(row, 5, "IFERROR(INDEX(\$$aucCol\$$a0:\$$aucCol\$${a0 + configs.size - 1},$pCfgIdx+1),\"\")", Style.DEC3)
             s.num(row, 6, ms.rows[0].exactAucTest[0], Style.BLUE_DEC3)
             s.formula(row, 7, "K$sr", Style.DEC3)
             s.formula(row, 8, "G$sr", Style.PCT)
@@ -207,6 +223,31 @@ class XlsxReport(
             s.formula(row, 11, "I$sr", Style.PCT)
             s.formula(row, 12, "J$sr", Style.PCT)
             s.formula(row, 13, "L$sr", Style.PCT)
+        }
+    }
+
+    /** Test-only table A: ROC/AUC on test per configuration (merge/drop/pad fixed, threshold swept). */
+    private fun writeTestOnlyTableA(s: XlsxWriter.Sheet, m: Int, ms: ModelSummary, title: Int, aFirst: Int) {
+        s.str(title, 0, "A. ROC/AUC trên test (quét ngưỡng với merge/drop/pad của từng cấu hình)", Style.BOLD)
+        val head = listOf(
+            "Cấu hình", "Mô tả", "AUC test strict", "AUC test collar", "AUC test chỉ biên", "AUC chính xác test (A0)",
+            "TPR@FPR1 (test)", "TPR@FPR2 (test)",
+        )
+        head.forEachIndexed { c, h -> s.str(title + 1, c, h, Style.HEADER) }
+        configs.forEachIndexed { c, cfg ->
+            val row = aFirst + c
+            val r0 = blockRow(m, 1, 0, c)
+            val r1 = r0 + NUM_THR - 1
+            fun rng(col: String) = "$sw\$$col\$$r0:\$$col\$$r1"
+            val rr = ms.rows[c]
+            s.str(row, 0, cfg.code)
+            s.str(row, 1, ms.eval.describe(cfg))
+            s.num(row, 2, rr.aucTest[0], Style.BLUE_DEC3)
+            s.num(row, 3, rr.aucTest[1], Style.BLUE_DEC3)
+            s.num(row, 4, rr.aucTest[2], Style.BLUE_DEC3)
+            s.num(row, 5, rr.exactAucTest[0], Style.BLUE_DEC3)
+            s.formula(row, 6, "IFERROR(SUMPRODUCT(MAX((${rng("K")}<=$pFpr1)*${rng("M")})),\"\")", Style.PCT)
+            s.formula(row, 7, "IFERROR(SUMPRODUCT(MAX((${rng("K")}<=$pFpr2)*${rng("M")})),\"\")", Style.PCT)
         }
     }
 

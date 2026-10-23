@@ -225,6 +225,48 @@ class EvalTest {
         for (p in 0..3) assertEquals(res.value(best), res.marginal(p).minOf { it.second }, 1e-12)
     }
 
+    /** Test-only mode: every file is test, thresholds fixed per model; writes a workbook for check_xlsx.py. */
+    @Test
+    fun testOnlyUsesFixedThreshold() {
+        val rnd = Random(5)
+        val items = dataset(rnd, 20)
+        val split = Split(0f, BooleanArray(items.size))
+        val models = listOf(VadModelType.FIRERED, VadModelType.SILERO)
+        val fixed = listOf(37, 62)
+        val summaries = models.mapIndexed { mi, m ->
+            val videos = items.map { item ->
+                val n = item.gt.bins
+                val probs = FloatArray(n * 50) { j ->
+                    val base = if (item.gt.labels[j / 50].toInt() == 1) 0.6f else 0.3f
+                    (base + (rnd.nextGaussian() * 0.2).toFloat()).coerceIn(0f, 1f)
+                }
+                val r = result(probs, 0.01f, n * BIN_SEC)
+                Metrics.evaluate(r, item.gt, 0.2f) { cfg, t -> settingsSegmenter(r, cfg.settings(m.defaults, m.defaults, t)) }
+            }
+            val e = ModelEval(
+                m, ModelSource("asset:models/x.onnx", ModelFormat.ONNX, "${m.assetBase}.onnx", false),
+                m.defaults, m.defaults, null, 0.2f, videos, split.devIndices(), split.testIndices(),
+            )
+            val ms = ModelSummary.compute(e, items, SelectParams(), fixed[mi])
+            // The test tables use the fixed threshold for config A4 over all files.
+            assertEquals(fixed[mi], ms.usedK)
+            assertEquals(items.size, e.testIdx.size)
+            val all = videos.map { it.conf(PostConfig.A4.ordinal, fixed[mi], 0) }.fold(Conf.ZERO, Conf::plus)
+            assertEquals(all, ms.test[0])
+            assertTrue(ms.rows[PostConfig.A4.ordinal].aucTest[0] > 0.5)
+            ms
+        }
+        val dir = File("build/eval-test/test-only").apply { mkdirs() }
+        File(dir, "report.xlsx").outputStream().use {
+            XlsxReport(items, split, summaries, SelectParams(), 0.2f, "phase1", "gt", "test", testOnly = true).write(it)
+        }
+        val expected = summaries.joinToString(",", "[", "]") { ms ->
+            val test = ms.test.joinToString(",", "[", "]") { c -> "[${c.tp},${c.fn},${c.fp},${c.tn}]" }
+            "{\"model\":\"${ms.model.label}\",\"testOnly\":true,\"nConfigs\":${ms.rows.size},\"usedK\":${ms.usedK},\"test\":$test}"
+        }
+        File(dir, "expected.json").writeText(expected)
+    }
+
     private fun dataset(rnd: Random, n: Int): List<EvalItem> = List(n) { i ->
         val bins = 40 + rnd.nextInt(200)
         val labels = ByteArray(bins)

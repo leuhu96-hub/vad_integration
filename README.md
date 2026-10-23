@@ -54,6 +54,10 @@ Chọn tham số tốt nhất cho user từ một bộ dữ liệu có ground tr
 5. "Áp dụng cho user" ghi ngưỡng + tham số của cấu hình vào cài đặt; "Xuất" tạo file `.xlsx`
    (bảng tổng hợp bằng công thức, tham số nền vàng) và ảnh ROC.
 
+Chế độ **Chỉ test** (mục 2): không chia dev, mọi file ghép được đều dùng để đánh giá cấu hình
+đang lưu của user (model, merge, drop, pad) với ngưỡng chọn bằng slider; cho bảng chỉ số 3 chế độ,
+theo nhóm, ROC/AUC quét ngưỡng quanh cấu hình và file Excel (ngưỡng là ô vàng sửa được).
+
 Code: `vad/eval/` (GT, quét SAF, chia tập, metrics, xlsx), `DevViewModel.kt`, `ui/DevScreen.kt`.
 
 ## Build
