@@ -15,6 +15,8 @@ class SettingsStore(context: Context) {
             minSilenceMs = prefs.getInt("$p.minSilenceMs", d.minSilenceMs),
             prePadMs = prefs.getInt("$p.prePadMs", d.prePadMs),
             postPadMs = prefs.getInt("$p.postPadMs", d.postPadMs),
+            smoothWindowMs = prefs.getInt("$p.smoothWindowMs", d.smoothWindowMs),
+            maxSpeechSec = prefs.getFloat("$p.maxSpeechSec", d.maxSpeechSec),
         )
     }
 
@@ -26,6 +28,8 @@ class SettingsStore(context: Context) {
             .putInt("$p.minSilenceMs", s.minSilenceMs)
             .putInt("$p.prePadMs", s.prePadMs)
             .putInt("$p.postPadMs", s.postPadMs)
+            .putInt("$p.smoothWindowMs", s.smoothWindowMs)
+            .putFloat("$p.maxSpeechSec", s.maxSpeechSec)
             .apply()
     }
 }

@@ -225,6 +225,7 @@ class DevViewModel(app: Application) : AndroidViewModel(app) {
             .putString("grid.pre", SearchGrid.format(g.prePad))
             .putString("grid.post", SearchGrid.format(g.postPad))
             .putInt("grid.thrStep", g.thrStep)
+            .putString("grid.smooth", SearchGrid.format(g.smooth))
             .apply()
         _state.update { it.copy(grid = g, stale = it.evals.isNotEmpty() && it.searchEnabled) }
     }
@@ -238,6 +239,7 @@ class DevViewModel(app: Application) : AndroidViewModel(app) {
             prePad = list("grid.pre", d.prePad),
             postPad = list("grid.post", d.postPad),
             thrStep = prefs.getInt("grid.thrStep", d.thrStep),
+            smooth = list("grid.smooth", d.smooth),
         )
     }
 
@@ -298,15 +300,16 @@ class DevViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
 
-            // 2. Optional grid search of merge/drop/pad on dev (config A5).
+            // 2. Optional grid search of merge/drop/pad (+ FireRedVAD smoothing) on dev (config A5).
             val params = _state.value.params
             val devIdx = split.devIndices()
             val searches = HashMap<VadModelType, SearchResult>()
-            if (s.searchEnabled && !s.testOnly && s.grid.size > 0) {
+            if (s.searchEnabled && !s.testOnly && s.grid.size() > 0) {
                 for ((mi, entry) in models.entries.withIndex()) {
                     val (m, conf) = entry
                     val src = conf.source!!
-                    val label = "Tìm tham số ${m.label} (${mi + 1}/${models.size}): ${s.grid.size} tổ hợp × " +
+                    val withSmooth = m == VadModelType.FIRERED
+                    val label = "Tìm tham số ${m.label} (${mi + 1}/${models.size}): ${s.grid.size(withSmooth)} tổ hợp × " +
                         "${s.grid.thresholds.size} ngưỡng"
                     progress(0f, label)
                     val started = System.currentTimeMillis()
@@ -323,6 +326,8 @@ class DevViewModel(app: Application) : AndroidViewModel(app) {
                             val eta = elapsed / n * (devIdx.size - n) / 1000
                             progress(n.toFloat() / devIdx.size, "$label · $n/${devIdx.size} file · còn ~${fmtDuration(eta)}")
                         },
+                        base = conf.settings,
+                        withSmooth = withSmooth,
                     )
                 }
             }

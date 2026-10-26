@@ -6,6 +6,10 @@ data class SegmentSettings(
     val minSilenceMs: Int,
     val prePadMs: Int,
     val postPadMs: Int,
+    /** FireRedVAD only: moving-average window over the 10 ms frame probabilities. */
+    val smoothWindowMs: Int = 50,
+    /** FireRedVAD only: longer segments are split at the lowest probability in their second half. */
+    val maxSpeechSec: Float = 20f,
 )
 
 /**

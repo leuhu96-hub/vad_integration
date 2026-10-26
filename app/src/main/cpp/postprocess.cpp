@@ -263,7 +263,7 @@ std::vector<Segment> MakeSegments(ModelType type, const ProbTrack& track,
     std::vector<Segment> segs;
     switch (type) {
         case ModelType::kFireRedVad: {
-            FireRedPostprocessor pp(/*smooth_window=*/5, params.threshold,
+            FireRedPostprocessor pp(std::max(1, params.smooth_window_ms / 10), params.threshold,
                                     std::max(1, params.min_speech_ms / 10),
                                     std::max(1, static_cast<int>(params.max_speech_s * 100)),
                                     params.min_silence_ms / 10, params.pre_pad_ms / 10,

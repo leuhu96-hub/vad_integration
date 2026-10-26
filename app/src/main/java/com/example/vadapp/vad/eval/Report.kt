@@ -10,7 +10,7 @@ class ModelEval(
     val source: ModelSource,
     /** Segmenter settings A2..A4 were built from. */
     val settings: SegmentSettings,
-    /** merge/drop/pad of A5: the grid-search optimum, or [settings] when no search ran. */
+    /** merge/drop/pad (+ smoothing) of A5: the grid-search optimum, or [settings] when no search ran. */
     val tuned: SegmentSettings,
     val search: SearchResult?,
     val binRatio: Float,
@@ -28,7 +28,8 @@ class ModelEval(
     /** Description of [cfg] with the values actually used (A5 shows the tuned parameters). */
     fun describe(cfg: PostConfig): String = when (cfg) {
         PostConfig.A5 -> if (search?.best == null) "A5 = A4 (chưa tìm tham số)" else
-            "Tối ưu trên dev: merge ${tuned.minSilenceMs}, drop ${tuned.minSpeechMs}, pad ${tuned.prePadMs}/${tuned.postPadMs} ms"
+            "Tối ưu trên dev: merge ${tuned.minSilenceMs}, drop ${tuned.minSpeechMs}, pad ${tuned.prePadMs}/${tuned.postPadMs} ms" +
+                (if (search.withSmooth) ", làm mượt ${tuned.smoothWindowMs} ms" else "")
         else -> cfg.description
     }
 }

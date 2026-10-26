@@ -14,7 +14,9 @@ struct SegmentParams {
     int min_silence_ms = 100;
     int pre_pad_ms = 0;   // extends the start of each segment
     int post_pad_ms = 0;  // extends the end of each segment
-    float max_speech_s = 20.0f;  // FireRedVAD splits longer segments at a probability dip
+    // FireRedVAD only (VadPostprocessor smooth_window_size / max_speech_frame).
+    int smooth_window_ms = 50;   // trailing moving average over the frame probabilities
+    float max_speech_s = 20.0f;  // longer segments are split at a probability dip
 };
 
 using Segment = std::pair<float, float>;  // [start, end) in seconds

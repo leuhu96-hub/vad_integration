@@ -150,7 +150,8 @@ Java_com_example_vadapp_vad_NativeVad_segment(JNIEnv* env, jobject /*thiz*/, jin
                                               jfloatArray probs, jfloat hop_s, jfloat offset_s,
                                               jfloat duration_s, jfloat threshold,
                                               jint min_speech_ms, jint min_silence_ms,
-                                              jint pre_pad_ms, jint post_pad_ms) {
+                                              jint pre_pad_ms, jint post_pad_ms,
+                                              jint smooth_window_ms, jfloat max_speech_s) {
     ProbTrack track;
     track.hop_s = hop_s;
     track.offset_s = offset_s;
@@ -163,6 +164,8 @@ Java_com_example_vadapp_vad_NativeVad_segment(JNIEnv* env, jobject /*thiz*/, jin
     params.min_silence_ms = min_silence_ms;
     params.pre_pad_ms = pre_pad_ms;
     params.post_pad_ms = post_pad_ms;
+    params.smooth_window_ms = smooth_window_ms;
+    params.max_speech_s = max_speech_s;
 
     const auto segs = MakeSegments(static_cast<ModelType>(model_type), track, duration_s, params);
     std::vector<float> flat;

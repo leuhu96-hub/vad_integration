@@ -16,23 +16,34 @@ data class SearchGrid(
     val prePad: List<Int> = listOf(0, 50, 100, 200),
     val postPad: List<Int> = listOf(0, 50, 100, 200),
     val thrStep: Int = 5,
+    /** FireRedVAD smoothing window (ms); only searched when the model has one (see [ParamSearch.search]). */
+    val smooth: List<Int> = listOf(30, 50, 100, 150),
 ) {
     /** Threshold indexes (k / 100) tried during the search. */
     val thresholds: List<Int> get() = (0..100 step thrStep.coerceIn(1, 100)).toList()
 
-    /** All combinations, merge outermost; threshold is filled in later. */
-    val combos: List<SegmentSettings>
-        get() = merge.flatMap { m ->
-            drop.flatMap { d ->
-                prePad.flatMap { pre ->
-                    postPad.map { post ->
-                        SegmentSettings(threshold = 0f, minSpeechMs = d, minSilenceMs = m, prePadMs = pre, postPadMs = post)
+    /**
+     * All combinations, smoothing (when [withSmooth]) then merge outermost; threshold is filled in
+     * later. Parameters the grid does not search come from [base].
+     */
+    fun combos(base: SegmentSettings = ZERO, withSmooth: Boolean = false): List<SegmentSettings> =
+        (if (withSmooth) smooth else listOf(base.smoothWindowMs)).flatMap { sm ->
+            merge.flatMap { m ->
+                drop.flatMap { d ->
+                    prePad.flatMap { pre ->
+                        postPad.map { post ->
+                            base.copy(
+                                threshold = 0f, minSpeechMs = d, minSilenceMs = m, prePadMs = pre, postPadMs = post,
+                                smoothWindowMs = sm,
+                            )
+                        }
                     }
                 }
             }
         }
 
-    val size: Int get() = merge.size * drop.size * prePad.size * postPad.size
+    fun size(withSmooth: Boolean = false): Int =
+        merge.size * drop.size * prePad.size * postPad.size * (if (withSmooth) smooth.size else 1)
 
     companion object {
         /** "0, 100,200" -> [0, 100, 200]; sorted, distinct, non-negative. */
@@ -40,6 +51,8 @@ data class SearchGrid(
             text.split(Regex("[,;\\s]+")).mapNotNull { it.trim().toIntOrNull() }.filter { it >= 0 }.distinct().sorted()
 
         fun format(values: List<Int>) = values.joinToString(", ")
+
+        private val ZERO = SegmentSettings(threshold = 0f, minSpeechMs = 0, minSilenceMs = 0, prePadMs = 0, postPadMs = 0)
     }
 }
 
@@ -57,6 +70,8 @@ class SearchEntry(
 
 class SearchResult(
     val grid: SearchGrid,
+    /** Whether the smoothing window was part of the search (FireRedVAD). */
+    val withSmooth: Boolean,
     /** In grid order. */
     val entries: List<SearchEntry>,
     val criterion: Criterion,
@@ -74,27 +89,31 @@ class SearchResult(
 
     /**
      * Influence of one parameter: for each of its candidate values, the best objective value
-     * over all other parameters. [param] 0 = merge, 1 = drop, 2 = pre pad, 3 = post pad.
+     * over all other parameters. [param] 0 = merge, 1 = drop, 2 = pre pad, 3 = post pad,
+     * 4 = smoothing (only when [withSmooth]).
      */
     fun marginal(param: Int): List<Pair<Int, Double>> {
-        val values = when (param) { 0 -> grid.merge; 1 -> grid.drop; 2 -> grid.prePad; else -> grid.postPad }
+        val values = when (param) { 0 -> grid.merge; 1 -> grid.drop; 2 -> grid.prePad; 3 -> grid.postPad; else -> grid.smooth }
         return values.map { v ->
             val best = entries.filter { !it.cost.isNaN() && paramOf(it.settings, param) == v }.minOfOrNull { it.cost }
             v to (best?.let { Metrics.costToValue(criterion, it) } ?: Double.NaN)
         }
     }
 
+    /** Parameter indexes of [marginal] that were searched. */
+    val params: IntRange get() = if (withSmooth) 0..4 else 0..3
+
     companion object {
-        val PARAM_NAMES = listOf("Merge (lặng ≥ ms)", "Drop (speech < ms)", "Pre pad (ms)", "Post pad (ms)")
+        val PARAM_NAMES = listOf("Merge (lặng ≥ ms)", "Drop (speech < ms)", "Pre pad (ms)", "Post pad (ms)", "Làm mượt (ms)")
 
         fun paramOf(s: SegmentSettings, param: Int) = when (param) {
-            0 -> s.minSilenceMs; 1 -> s.minSpeechMs; 2 -> s.prePadMs; else -> s.postPadMs
+            0 -> s.minSilenceMs; 1 -> s.minSpeechMs; 2 -> s.prePadMs; 3 -> s.postPadMs; else -> s.smoothWindowMs
         }
     }
 }
 
 /**
- * Exhaustive grid search of merge / drop / pre pad / post pad (× threshold) on the dev files,
+ * Exhaustive grid search of [smoothing ×] merge / drop / pre pad / post pad (× threshold) on the dev files,
  * scored by the selection criterion on the strict mode.
  */
 object ParamSearch {
@@ -113,9 +132,13 @@ object ParamSearch {
         mrMax: Double,
         keepGoing: () -> Boolean = { true },
         onFileDone: (done: Int) -> Unit = {},
+        /** Source of the parameters the grid does not search (e.g. FireRedVAD max speech). */
+        base: SegmentSettings? = null,
+        /** Also search [SearchGrid.smooth] (only meaningful for FireRedVAD). */
+        withSmooth: Boolean = false,
     ): SearchResult {
         val started = System.currentTimeMillis()
-        val combos = grid.combos
+        val combos = if (base != null) grid.combos(base, withSmooth) else grid.combos(withSmooth = withSmooth)
         val thr = grid.thresholds
         val t = thr.size
         fun at(c: Int, ti: Int, mode: Int) = ((c * t + ti) * MODES + mode) * 4
@@ -158,6 +181,6 @@ object ParamSearch {
                 conf = List(MODES) { m -> if (ti >= 0) Conf.of(total, at(c, ti, m)) else Conf.ZERO },
             )
         }
-        return SearchResult(grid, entries, criterion, missWeight, mrMax, devFiles, System.currentTimeMillis() - started)
+        return SearchResult(grid, withSmooth, entries, criterion, missWeight, mrMax, devFiles, System.currentTimeMillis() - started)
     }
 }

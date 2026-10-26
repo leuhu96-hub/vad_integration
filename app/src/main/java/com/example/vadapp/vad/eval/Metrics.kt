@@ -35,7 +35,7 @@ enum class PostConfig(val code: String, val description: String) {
 
     /** Segmenter settings for A1..A5 (A0 does not use the segmenter). */
     fun settings(base: SegmentSettings, tuned: SegmentSettings, threshold: Float) =
-        if (this == A5) tuned.copy(threshold = threshold) else SegmentSettings(
+        if (this == A5) tuned.copy(threshold = threshold) else base.copy(
             threshold = threshold,
             minSilenceMs = if (this >= A2) base.minSilenceMs else 0,
             minSpeechMs = if (this >= A3) base.minSpeechMs else 0,

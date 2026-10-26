@@ -201,7 +201,7 @@ class EvalTest {
         val a5 = PostConfig.A5.ordinal
         // Brute force: full evaluation with each combination as the tuned settings (A5).
         res.entries.forEachIndexed { c, e ->
-            val combo = grid.combos[c]
+            val combo = grid.combos()[c]
             val sweep = Metrics.sum(items.indices.map { i ->
                 Metrics.evaluate(results[i], items[i].gt, 0.2f) { cfg, t ->
                     settingsSegmenter(results[i], cfg.settings(combo, combo, t))
@@ -223,6 +223,13 @@ class EvalTest {
         assertTrue(full <= best.cost + 1e-12)
         // Marginals: the best value over a parameter's values is the global best.
         for (p in 0..3) assertEquals(res.value(best), res.marginal(p).minOf { it.second }, 1e-12)
+        // FireRedVAD smoothing axis: outermost; parameters the grid does not search come from base.
+        val base = VadModelType.FIRERED.defaults.copy(maxSpeechSec = 7f)
+        val smoothCombos = grid.combos(base, withSmooth = true)
+        assertEquals(grid.size(withSmooth = true), smoothCombos.size)
+        assertEquals(grid.smooth, smoothCombos.map { it.smoothWindowMs }.distinct())
+        assertTrue(smoothCombos.all { it.maxSpeechSec == 7f })
+        assertTrue(grid.combos(base).all { it.smoothWindowMs == base.smoothWindowMs })
     }
 
     /** Test-only mode: every file is test, thresholds fixed per model; writes a workbook for check_xlsx.py. */

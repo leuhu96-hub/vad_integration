@@ -513,6 +513,16 @@ private fun SettingsPanel(
                 "Post padding", "${settings.postPadMs} ms",
                 settings.postPadMs.toFloat(), 0f..500f,
             ) { onChange(settings.copy(postPadMs = (it / 10).roundToInt() * 10)) }
+            if (model == VadModelType.FIRERED) {
+                LabeledSlider(
+                    "Làm mượt", "${settings.smoothWindowMs} ms",
+                    settings.smoothWindowMs.toFloat(), 10f..300f,
+                ) { onChange(settings.copy(smoothWindowMs = (it / 10).roundToInt() * 10)) }
+                LabeledSlider(
+                    "Speech tối đa", String.format(Locale.US, "%.0f s", settings.maxSpeechSec),
+                    settings.maxSpeechSec, 1f..60f,
+                ) { onChange(settings.copy(maxSpeechSec = it.roundToInt().toFloat())) }
+            }
         }
     }
 }

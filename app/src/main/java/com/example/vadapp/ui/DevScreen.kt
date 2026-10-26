@@ -328,6 +328,14 @@ private fun ModelsSection(st: DevState, vm: DevViewModel) = Section("3. Model & 
                 SliderRow("Post pad", "${s.postPadMs} ms", s.postPadMs.toFloat(), 0f..500f) {
                     vm.setModelSettings(m, s.copy(postPadMs = (it / 10).roundToInt() * 10))
                 }
+                if (m == VadModelType.FIRERED) {
+                    SliderRow("Làm mượt", "${s.smoothWindowMs} ms", s.smoothWindowMs.toFloat(), 10f..300f) {
+                        vm.setModelSettings(m, s.copy(smoothWindowMs = (it / 10).roundToInt() * 10))
+                    }
+                    SliderRow("Speech tối đa", String.format(Locale.US, "%.0f s", s.maxSpeechSec), s.maxSpeechSec, 1f..60f) {
+                        vm.setModelSettings(m, s.copy(maxSpeechSec = it.roundToInt().toFloat()))
+                    }
+                }
             }
         }
     }
@@ -451,8 +459,8 @@ private fun SearchControls(st: DevState, vm: DevViewModel) {
         Switch(checked = st.searchEnabled, onCheckedChange = vm::setSearchEnabled, enabled = !st.busy)
     }
     if (!st.searchEnabled) {
-        Hint("Tắt: A5 = A4. Bật: thử mọi tổ hợp merge × drop × pre pad × post pad × ngưỡng trên tập dev, " +
-            "chọn tổ hợp tốt nhất theo tiêu chí, rồi quét ngưỡng đầy đủ cho A5.")
+        Hint("Tắt: A5 = A4. Bật: thử mọi tổ hợp merge × drop × pre pad × post pad × ngưỡng trên tập dev " +
+            "(FireRedVAD thêm trục làm mượt), chọn tổ hợp tốt nhất theo tiêu chí, rồi quét ngưỡng đầy đủ cho A5.")
         return
     }
     val g = st.grid
@@ -460,6 +468,11 @@ private fun SearchControls(st: DevState, vm: DevViewModel) {
     GridField("Drop: speech < (ms)", g.drop) { vm.setGrid(g.copy(drop = it)) }
     GridField("Pre pad (ms)", g.prePad) { vm.setGrid(g.copy(prePad = it)) }
     GridField("Post pad (ms)", g.postPad) { vm.setGrid(g.copy(postPad = it)) }
+    val fireRed = st.models[VadModelType.FIRERED]?.let { it.enabled && it.source != null } == true
+    if (fireRed) {
+        GridField("Làm mượt FireRedVAD (ms)", g.smooth) { vm.setGrid(g.copy(smooth = it)) }
+        Hint("Chỉ áp dụng cho FireRedVAD (bước 10 ms, < 20 ms = không làm mượt). Nhập một giá trị để cố định.")
+    }
     ChipRow("Bước ngưỡng khi tìm", listOf(5, 2, 1), g.thrStep, { String.format(Locale.US, "%.2f", it / 100.0) }) {
         vm.setGrid(g.copy(thrStep = it))
     }
@@ -471,10 +484,11 @@ private fun SearchControls(st: DevState, vm: DevViewModel) {
         }
     }
     val devFiles = st.split?.devIndices()?.size ?: 0
-    val models = st.models.values.count { it.enabled && it.source != null }
-    val calls = g.size.toLong() * g.thresholds.size * devFiles * models
+    val models = st.models.filter { it.value.enabled && it.value.source != null }.keys
+    val combos = models.sumOf { g.size(it == VadModelType.FIRERED).toLong() }
+    val calls = combos * g.thresholds.size * devFiles
     Text(
-        "${g.size} tổ hợp × ${g.thresholds.size} ngưỡng × $devFiles file dev × $models model = " +
+        "$combos tổ hợp (${models.size} model) × ${g.thresholds.size} ngưỡng × $devFiles file dev = " +
             String.format(Locale.US, "%,d", calls) + " lần tách đoạn",
         style = MaterialTheme.typography.labelSmall,
         color = if (calls > 20_000_000) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -524,6 +538,7 @@ private fun SearchSection(ms: ModelSummary, st: DevState, vm: DevViewModel) {
         val b = best.settings
         Text(
             "Tốt nhất: merge ${b.minSilenceMs} · drop ${b.minSpeechMs} · pad ${b.prePadMs}/${b.postPadMs} ms · " +
+                (if (r.withSmooth) "làm mượt ${b.smoothWindowMs} ms · " else "") +
                 "ngưỡng ${fmtThr(best.bestK)} → ${fmt3(r.value(best))}",
             style = MaterialTheme.typography.bodyMedium,
         )
@@ -541,24 +556,24 @@ private fun SearchSection(ms: ModelSummary, st: DevState, vm: DevViewModel) {
         )
         Text("Top 10 tổ hợp (dev, strict)", style = MaterialTheme.typography.labelLarge)
         DataTable(
-            header = listOf("#", "Merge", "Drop", "Pre", "Post", "Ngưỡng", r.criterion.excel, "F1", "MR", "FAR", "DCF"),
+            header = listOf("#", "Merge", "Drop", "Pre", "Post") + (if (r.withSmooth) listOf("Mượt") else emptyList()) +
+                listOf("Ngưỡng", r.criterion.excel, "F1", "MR", "FAR", "DCF"),
             rows = r.ranked().take(10).mapIndexed { i, e ->
                 val c = e.conf[0]
                 val s = e.settings
-                listOf(
-                    "${i + 1}", "${s.minSilenceMs}", "${s.minSpeechMs}", "${s.prePadMs}", "${s.postPadMs}",
-                    fmtThr(e.bestK), fmt3(r.value(e)), fmt3(c.f1), fmtPct(c.mr), fmtPct(c.far), fmt3(c.dcf(p.missWeight)),
-                )
+                listOf("${i + 1}", "${s.minSilenceMs}", "${s.minSpeechMs}", "${s.prePadMs}", "${s.postPadMs}") +
+                    (if (r.withSmooth) listOf("${s.smoothWindowMs}") else emptyList()) +
+                    listOf(fmtThr(e.bestK), fmt3(r.value(e)), fmt3(c.f1), fmtPct(c.mr), fmtPct(c.far), fmt3(c.dcf(p.missWeight)))
             },
             firstColWidth = 32.dp,
             colWidth = 64.dp,
             highlightRow = 0,
         )
         Text("Ảnh hưởng từng tham số (tốt nhất theo các tham số còn lại)", style = MaterialTheme.typography.labelLarge)
-        val values = (0..3).map { r.marginal(it) }
+        val values = r.params.map { r.marginal(it) }
         val finite = values.flatten().map { it.second }.filter { !it.isNaN() }
         val maxV = (finite.maxOrNull() ?: 1.0).let { if (it <= 0) 1.0 else it * 1.1 }
-        for (param in 0..3) {
+        for (param in r.params) {
             val m = values[param]
             GroupedBarChart(
                 groups = m.map { "${it.first}" },

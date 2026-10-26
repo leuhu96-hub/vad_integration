@@ -1,5 +1,6 @@
 package com.example.vadapp.vad.eval
 
+import com.example.vadapp.vad.VadModelType
 import com.example.vadapp.vad.eval.XlsxWriter.Style
 import java.io.OutputStream
 import java.util.Locale
@@ -103,6 +104,7 @@ class XlsxReport(
             val st = e.settings
             s.str(r, 0, "Model: ${e.model.label} — ${e.source.fileName} (${e.source.format.label}); " +
                 "merge ${st.minSilenceMs} ms, drop ${st.minSpeechMs} ms, pad ${st.prePadMs}/${st.postPadMs} ms" +
+                (if (e.model == VadModelType.FIRERED) ", làm mượt ${st.smoothWindowMs} ms, speech tối đa ${st.maxSpeechSec} s" else "") +
                 (if (e.failed > 0) "; ${e.failed} file lỗi bị bỏ qua" else ""), Style.SECTION)
             val usedRow = r + 1
             val aFirst = r + 7
@@ -389,7 +391,7 @@ class XlsxReport(
             "Việc chọn tổ hợp dùng tiêu chí/trọng số lúc tìm (cột Tiêu chí) và không tự tính lại khi đổi tham số; " +
             "số đếm là số xanh, MR/FAR/F1/DCF là công thức.", Style.NOTE)
         val head = listOf(
-            "Model", "Tiêu chí", "Hạng", "Merge (ms)", "Drop (ms)", "Pre pad (ms)", "Post pad (ms)", "Ngưỡng tốt nhất",
+            "Model", "Tiêu chí", "Hạng", "Merge (ms)", "Drop (ms)", "Pre pad (ms)", "Post pad (ms)", "Làm mượt (ms)", "Ngưỡng tốt nhất",
             "Mục tiêu", "TP", "FN", "FP", "TN", "MR", "FAR", "Precision", "Recall", "F1", "DCF",
         )
         head.forEachIndexed { c, h -> s.str(2, c, h, Style.HEADER) }
@@ -410,18 +412,19 @@ class XlsxReport(
                 s.num(r, 4, st.minSpeechMs.toDouble(), Style.BLUE_INT)
                 s.num(r, 5, st.prePadMs.toDouble(), Style.BLUE_INT)
                 s.num(r, 6, st.postPadMs.toDouble(), Style.BLUE_INT)
-                s.num(r, 7, if (e.bestK >= 0) e.bestK / 100.0 else null, Style.BLUE_DEC2)
-                s.num(r, 8, res.value(e), Style.BLUE_DEC3)
-                s.num(r, 9, c.tp.toDouble(), Style.BLUE_INT)
-                s.num(r, 10, c.fn.toDouble(), Style.BLUE_INT)
-                s.num(r, 11, c.fp.toDouble(), Style.BLUE_INT)
-                s.num(r, 12, c.tn.toDouble(), Style.BLUE_INT)
-                s.formula(r, 13, "IFERROR(K$r/(J$r+K$r),\"\")", Style.PCT)
-                s.formula(r, 14, "IFERROR(L$r/(L$r+M$r),\"\")", Style.PCT)
-                s.formula(r, 15, "IFERROR(J$r/(J$r+L$r),\"\")", Style.PCT)
-                s.formula(r, 16, "IFERROR(J$r/(J$r+K$r),\"\")", Style.PCT)
-                s.formula(r, 17, "IFERROR(2*J$r/(2*J$r+K$r+L$r),\"\")", Style.DEC3)
-                s.formula(r, 18, "IFERROR($w*N$r+(1-$w)*O$r,\"\")", Style.DEC3)
+                s.num(r, 7, if (res.withSmooth) st.smoothWindowMs.toDouble() else null, Style.BLUE_INT)
+                s.num(r, 8, if (e.bestK >= 0) e.bestK / 100.0 else null, Style.BLUE_DEC2)
+                s.num(r, 9, res.value(e), Style.BLUE_DEC3)
+                s.num(r, 10, c.tp.toDouble(), Style.BLUE_INT)
+                s.num(r, 11, c.fn.toDouble(), Style.BLUE_INT)
+                s.num(r, 12, c.fp.toDouble(), Style.BLUE_INT)
+                s.num(r, 13, c.tn.toDouble(), Style.BLUE_INT)
+                s.formula(r, 14, "IFERROR(L$r/(K$r+L$r),\"\")", Style.PCT)
+                s.formula(r, 15, "IFERROR(M$r/(M$r+N$r),\"\")", Style.PCT)
+                s.formula(r, 16, "IFERROR(K$r/(K$r+M$r),\"\")", Style.PCT)
+                s.formula(r, 17, "IFERROR(K$r/(K$r+L$r),\"\")", Style.PCT)
+                s.formula(r, 18, "IFERROR(2*K$r/(2*K$r+L$r+M$r),\"\")", Style.DEC3)
+                s.formula(r, 19, "IFERROR($w*O$r+(1-$w)*P$r,\"\")", Style.DEC3)
                 r++
             }
         }

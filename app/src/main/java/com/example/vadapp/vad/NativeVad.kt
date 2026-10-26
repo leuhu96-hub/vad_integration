@@ -77,6 +77,8 @@ object NativeVad {
         minSilenceMs: Int,
         prePadMs: Int,
         postPadMs: Int,
+        smoothWindowMs: Int,
+        maxSpeechSec: Float,
     ): FloatArray
 
     /** Runs [model] with the file [source] on the media behind a content [uri]. */
@@ -99,7 +101,7 @@ object NativeVad {
         val flat = segment(
             model.id, result.probs, result.hopSec, result.offsetSec, result.durationSec,
             settings.threshold, settings.minSpeechMs, settings.minSilenceMs,
-            settings.prePadMs, settings.postPadMs,
+            settings.prePadMs, settings.postPadMs, settings.smoothWindowMs, settings.maxSpeechSec,
         )
         return List(flat.size / 2) { Segment(flat[2 * it], flat[2 * it + 1]) }
     }
