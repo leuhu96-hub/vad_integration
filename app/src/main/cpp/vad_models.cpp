@@ -80,6 +80,23 @@ FireRedVadModel::FireRedVadModel(std::unique_ptr<InferenceSession> s, const std:
     if (static_cast<int>(cmvn_.mean.size()) != Fbank::kNumBins) throw VadError("cmvn dim mismatch");
     track_.hop_s = 0.010f;
     track_.offset_s = 0.0125f;  // centre of the 25 ms analysis window
+
+    // Fixed input is [1, T, 80] or [1, T, 80, 1] with T > 0.
+    const auto shape = session_->InputShape(0);
+    if (shape.size() >= 3 && shape[1] > 0) {
+        int64_t bins = 1;
+        for (size_t d = 2; d < shape.size(); ++d) bins *= shape[d];
+        if (bins != Fbank::kNumBins) throw VadError("FireRedVAD: unexpected feat shape");
+        fixed_frames_ = static_cast<int>(shape[1]);
+        fixed_shape_ = shape;
+        fixed_shape_[0] = 1;
+        if (fixed_frames_ <= kLookback + kLookahead) {
+            // Too short for the full receptive field: keep the middle half of each window.
+            LOGW("FireRedVAD: fixed T=%d < %d frames, probabilities will differ from the reference",
+                 fixed_frames_, kLookback + kLookahead + 1);
+            left_ctx_ = right_ctx_ = fixed_frames_ / 4;
+        }
+    }
 }
 
 void FireRedVadModel::Feed(const float* samples, size_t n) {
@@ -101,16 +118,53 @@ void FireRedVadModel::RunFrames(int num_frames) {
     fbank_.Compute(pending_.data(), num_frames, feat_.data());
     cmvn_.Apply(feat_.data(), num_frames);
 
-    auto out = session_->Run({{"feat", DType::kFloat32, {1, num_frames, Fbank::kNumBins}, feat_.data()}},
-                             {"probs"});
-    // Some converters pad the time axis; keep exactly one probability per frame.
-    const auto& probs = out[0].data;
-    track_.probs.insert(track_.probs.end(), probs.begin(),
-                        probs.begin() + std::min<size_t>(probs.size(), num_frames));
+    if (fixed_frames_ > 0) {
+        RunFixed(num_frames);
+    } else {
+        // Some converters pad the time axis; keep exactly one probability per frame.
+        const auto probs = Infer(feat_.data(), num_frames);
+        track_.probs.insert(track_.probs.end(), probs.begin(),
+                            probs.begin() + std::min<size_t>(probs.size(), num_frames));
+    }
 
     // The next chunk starts exactly where this chunk's next frame would have started.
     const size_t consumed = static_cast<size_t>(num_frames) * Fbank::kFrameShift;
     pending_.erase(pending_.begin(), pending_.begin() + std::min(consumed, pending_.size()));
+}
+
+// Slides a fixed_frames_ window over feat_ (one reference chunk). A frame is taken from a
+// window only where it has left_ctx_ frames before it and right_ctx_ after it inside the
+// window, or where the window edge is the chunk edge itself (the reference model sees no
+// context there either), so the result equals running the whole chunk at once.
+void FireRedVadModel::RunFixed(int num_frames) {
+    const int t = fixed_frames_;
+    if (num_frames <= t) {
+        // Zero (= CMVN mean) padding is not the same as the graph's own edge padding:
+        // the last few frames of a chunk shorter than T differ slightly.
+        window_.assign(static_cast<size_t>(t) * Fbank::kNumBins, 0.0f);
+        std::copy(feat_.begin(), feat_.begin() + static_cast<size_t>(num_frames) * Fbank::kNumBins,
+                  window_.begin());
+        const auto probs = Infer(window_.data(), t);
+        track_.probs.insert(track_.probs.end(), probs.begin(), probs.begin() + num_frames);
+        return;
+    }
+    for (int done = 0; done < num_frames;) {
+        const int start = std::min(std::max(0, done - left_ctx_), num_frames - t);
+        const int end = start + t == num_frames ? num_frames : start + t - right_ctx_;
+        const auto probs = Infer(feat_.data() + static_cast<size_t>(start) * Fbank::kNumBins, t);
+        track_.probs.insert(track_.probs.end(), probs.begin() + (done - start), probs.begin() + (end - start));
+        done = end;
+    }
+}
+
+std::vector<float> FireRedVadModel::Infer(const float* feat, int num_frames) {
+    const std::vector<int64_t> shape =
+            fixed_frames_ > 0 ? fixed_shape_ : std::vector<int64_t>{1, num_frames, Fbank::kNumBins};
+    auto out = session_->Run({{"feat", DType::kFloat32, shape, feat}}, {"probs"});
+    if (fixed_frames_ > 0 && out[0].data.size() < static_cast<size_t>(num_frames)) {
+        throw VadError("FireRedVAD: model returned fewer probabilities than frames");
+    }
+    return std::move(out[0].data);
 }
 
 // ---------------------------------------------------------------- Silero

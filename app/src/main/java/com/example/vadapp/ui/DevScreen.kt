@@ -135,7 +135,7 @@ fun DevScreen(
                             Text(st.gtTree?.let(DatasetScanner::treeName) ?: "Thư mục GT", maxLines = 1)
                         }
                     }
-                    Hint("Video: <gốc>/<quality>/…/tên.mp4 · GT: <gốc>/<category>/…/tên.txt (dòng \"0 0.5 speech\"). Ghép theo tên file.")
+                    DevHint("Video: <gốc>/<quality>/…/tên.mp4 · GT: <gốc>/<category>/…/tên.txt (dòng \"0 0.5 speech\"). Ghép theo tên file.")
                     Button(onClick = vm::scan, enabled = st.videoTree != null && st.gtTree != null && !st.busy) {
                         Text("Quét & ghép")
                     }
@@ -167,7 +167,7 @@ fun DevScreen(
                 }
                 item(key = "export") {
                     Section("Xuất báo cáo") {
-                        Hint("Tạo vad_dev_report_<ngày>.xlsx (bảng tổng hợp có công thức, sheet Quét ngưỡng, Split, Theo nhóm) và " +
+                        DevHint("Tạo vad_dev_report_<ngày>.xlsx (bảng tổng hợp có công thức, sheet Quét ngưỡng, Split, Theo nhóm) và " +
                             "${if (st.testOnly) 3 else 6} ảnh ROC trong thư mục bạn chọn.")
                         Button(onClick = { exportPicker.launch(st.videoTree) }, enabled = !st.busy) { Text("Chọn thư mục & xuất") }
                     }
@@ -198,7 +198,7 @@ private fun Section(title: String, content: @Composable ColumnScope.() -> Unit) 
 }
 
 @Composable
-private fun Hint(text: String) {
+private fun DevHint(text: String) {
     Text(text, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
@@ -247,13 +247,13 @@ private fun SplitSection(st: DevState, vm: DevViewModel) = Section("2. Chế đ�
         if (!st.busy) vm.setTestOnly(it)
     }
     if (st.testOnly) {
-        Hint("Không chia dev: cả ${st.scan?.items?.size ?: 0} file dùng để đánh giá cấu hình hiện tại của user " +
+        DevHint("Không chia dev: cả ${st.scan?.items?.size ?: 0} file dùng để đánh giá cấu hình hiện tại của user " +
             "(model, merge, drop, pad) với ngưỡng bạn chọn ở mục 3.")
     } else {
         SliderRow("Tỷ lệ dev", "${(st.devRatio * 100).roundToInt()}%", st.devRatio, 0.5f..0.9f, steps = 7) {
             vm.setDevRatio((it * 20).roundToInt() / 20f)
         }
-        Hint("Phân tầng theo quality × category, cân theo thời lượng rồi hoán đổi file để tỷ lệ speech hai tập gần nhau.")
+        DevHint("Phân tầng theo quality × category, cân theo thời lượng rồi hoán đổi file để tỷ lệ speech hai tập gần nhau.")
         FilledTonalButton(onClick = vm::makeSplit, enabled = !st.busy) { Text("Chia lại") }
     }
     if (st.cellStats.isNotEmpty()) {
@@ -334,11 +334,11 @@ private fun ModelsSection(st: DevState, vm: DevViewModel) = Section("3. Model & 
     SliderRow("Speech trong bin ≥", "${(st.binRatio * 100).roundToInt()}%", st.binRatio, 0.05f..1f, steps = 18) {
         vm.setBinRatio((it * 20).roundToInt() / 20f)
     }
-    Hint("Bin GT ${BIN_SEC}s là speech theo model khi phần speech (sau hậu xử lý) chiếm ≥ tỷ lệ này. " +
+    DevHint("Bin GT ${BIN_SEC}s là speech theo model khi phần speech (sau hậu xử lý) chiếm ≥ tỷ lệ này. " +
         "Kết quả model được cache: chạy lại sau khi đổi tham số chỉ mất thời gian quét ngưỡng.")
     if (st.testOnly) {
         TextButton(onClick = vm::reloadUserSettings, enabled = !st.busy) { Text("Nạp lại cài đặt user") }
-        Hint("Đổi ngưỡng không cần chạy lại: bảng và ROC cập nhật ngay. Đổi merge/drop/pad hoặc tỷ lệ bin thì cần chạy lại.")
+        DevHint("Đổi ngưỡng không cần chạy lại: bảng và ROC cập nhật ngay. Đổi merge/drop/pad hoặc tỷ lệ bin thì cần chạy lại.")
     } else {
         SearchControls(st, vm)
     }
@@ -356,7 +356,7 @@ private fun ParamsSection(st: DevState, vm: DevViewModel) = Section(if (st.testO
         ChipRow("Tiêu chí (trên dev, strict)", Criterion.entries, p.criterion, { it.label }) { vm.setParams(p.copy(criterion = it)) }
     }
     ChipRow("Cấu hình hậu xử lý cho tầng B", PostConfig.entries, p.config, { it.code }) { vm.setParams(p.copy(config = it)) }
-    Hint(p.config.description)
+    DevHint(p.config.description)
     SliderRow("Trọng số miss DCF", String.format(Locale.US, "%.2f", p.missWeight), p.missWeight.toFloat(), 0f..1f, steps = 19) {
         vm.setParams(p.copy(missWeight = (it * 20).roundToInt() / 20.0))
     }
@@ -379,7 +379,7 @@ private fun RocSection(vm: DevViewModel, st: DevState) = Section("5. ROC · cấ
     // st is read so the chart recomposes when summaries change.
     val series = remember(st.summaries, st.params, set, mode) { vm.rocSeries(set, EvalMode.entries[mode]) }
     RocChart(series, Modifier.fillMaxWidth().widthIn(max = 520.dp).aspectRatio(0.85f))
-    Hint(if (st.testOnly) "Quét ngưỡng với merge/drop/pad cố định; chấm tròn = cấu hình với ngưỡng bạn chọn."
+    DevHint(if (st.testOnly) "Quét ngưỡng với merge/drop/pad cố định; chấm tròn = cấu hình với ngưỡng bạn chọn."
         else "Chấm tròn = điểm làm việc tại ngưỡng đã chọn.")
 }
 
@@ -451,7 +451,7 @@ private fun SearchControls(st: DevState, vm: DevViewModel) {
         Switch(checked = st.searchEnabled, onCheckedChange = vm::setSearchEnabled, enabled = !st.busy)
     }
     if (!st.searchEnabled) {
-        Hint("Tắt: A5 = A4. Bật: thử mọi tổ hợp merge × drop × pre pad × post pad × ngưỡng trên tập dev, " +
+        DevHint("Tắt: A5 = A4. Bật: thử mọi tổ hợp merge × drop × pre pad × post pad × ngưỡng trên tập dev, " +
             "chọn tổ hợp tốt nhất theo tiêu chí, rồi quét ngưỡng đầy đủ cho A5.")
         return
     }

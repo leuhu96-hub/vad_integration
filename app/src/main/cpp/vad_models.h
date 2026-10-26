@@ -40,7 +40,9 @@ protected:
 };
 
 // FireRedVAD non-streaming DFSMN: 80-dim fbank + CMVN -> per-10ms speech probability.
-// I/O: feat [1, T, 80] -> probs [1, T, 1].
+// I/O: feat [1, T, 80] -> probs [1, T, 1]. T may be dynamic or fixed (NPU exports, possibly
+// with a trailing [.., 80, 1]); a fixed T is run as overlapping windows so that every kept
+// frame sees its full receptive field and matches the dynamic model.
 class FireRedVadModel : public VadModel {
 public:
     FireRedVadModel(std::unique_ptr<InferenceSession> s, const std::vector<uint8_t>& cmvn);
@@ -50,12 +52,22 @@ public:
 private:
     // Same chunking as the reference implementation (chunk_max_frame = 30000, i.e. 300 s).
     static constexpr int kChunkFrames = 30000;
+    // Receptive field of the bundled DFSMN: 8 FSMN layers, each with a 20-tap lookback
+    // (t-19..t) and a 20-tap lookahead (t+1..t+20) filter.
+    static constexpr int kLookback = 8 * 19;
+    static constexpr int kLookahead = 8 * 20;
     void RunFrames(int num_frames);
+    void RunFixed(int num_frames);
+    std::vector<float> Infer(const float* feat, int num_frames);
 
     Fbank fbank_;
     Cmvn cmvn_;
     std::vector<float> pending_;  // int16-scaled samples not yet consumed
     std::vector<float> feat_;
+    int fixed_frames_ = 0;              // >0: graph takes exactly this many frames
+    std::vector<int64_t> fixed_shape_;  // declared input shape, batch forced to 1
+    int left_ctx_ = kLookback, right_ctx_ = kLookahead;
+    std::vector<float> window_;  // zero-padded input when a chunk is shorter than fixed_frames_
 };
 
 // Silero VAD v5/v6: 512-sample windows with 64 samples of context and a recurrent state.
