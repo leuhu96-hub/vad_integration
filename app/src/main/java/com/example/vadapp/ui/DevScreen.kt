@@ -168,7 +168,7 @@ fun DevScreen(
                 item(key = "export") {
                     Section("Xuất báo cáo") {
                         Hint("Tạo vad_dev_report_<ngày>.xlsx (bảng tổng hợp có công thức, sheet Quét ngưỡng, Split, Theo nhóm) và " +
-                            "${if (st.testOnly) 3 else 6} ảnh ROC trong thư mục bạn chọn.")
+                            "${if (st.testOnly) 3 else 6} ảnh ROC và 1 ảnh gộp tất cả (roc_*_all.png) trong thư mục bạn chọn.")
                         Button(onClick = { exportPicker.launch(st.videoTree) }, enabled = !st.busy) { Text("Chọn thư mục & xuất") }
                     }
                 }

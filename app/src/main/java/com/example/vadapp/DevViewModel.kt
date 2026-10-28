@@ -10,6 +10,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.vadapp.ui.RocSeries
 import com.example.vadapp.ui.modelColor
 import com.example.vadapp.ui.renderRocBitmap
+import com.example.vadapp.ui.renderRocGridBitmap
 import com.example.vadapp.vad.ModelRegistry
 import com.example.vadapp.vad.ModelSource
 import com.example.vadapp.vad.NativeVad
@@ -450,15 +451,24 @@ class DevViewModel(app: Application) : AndroidViewModel(app) {
                         s.gtTree?.let(DatasetScanner::treeName).orEmpty(), date, s.testOnly,
                     ).write(out)
                 }
+                val panels = ArrayList<Pair<String, List<RocSeries>>>()
                 for (set in sets) for (mode in EvalMode.entries) {
                     val setName = if (set == 0) "dev" else "test"
-                    val bmp = renderRocBitmap("ROC $setName · ${mode.label} · ${s.params.config.code}", rocSeries(set, mode))
+                    val title = "ROC $setName · ${mode.label} · ${s.params.config.code}"
+                    val series = rocSeries(set, mode)
+                    panels += title to series
+                    val bmp = renderRocBitmap(title, series)
                     val png = create("image/png", "roc_${stamp}_${setName}_${mode.short}.png")
                     resolver.openOutputStream(png)!!.use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
                     bmp.recycle()
                 }
+                // One extra image with every ROC plot: a row per set (dev, test), a column per mode.
+                val all = renderRocGridBitmap(panels, EvalMode.entries.size)
+                val allPng = create("image/png", "roc_${stamp}_all.png")
+                resolver.openOutputStream(allPng)!!.use { all.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                all.recycle()
             }
-            _state.update { it.copy(message = "Đã xuất vad_dev_report_*.xlsx và ${sets.size * EvalMode.entries.size} ảnh ROC") }
+            _state.update { it.copy(message = "Đã xuất vad_dev_report_*.xlsx và ${sets.size * EvalMode.entries.size + 1} ảnh ROC (gồm roc_*_all.png)") }
         }
     }
 }

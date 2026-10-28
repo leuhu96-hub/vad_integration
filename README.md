@@ -55,7 +55,7 @@ Chọn tham số tốt nhất cho user từ một bộ dữ liệu có ground tr
    max(MR/x, FAR/y) nhỏ nhất, tức biên an toàn lớn nhất. Không bộ nào thỏa thì không chọn được (hiển thị "–").
    Nên đặt x, y chặt hơn mục tiêu một chút vì kết quả trên test thường kém hơn dev.
 5. "Áp dụng cho user" ghi ngưỡng + tham số của cấu hình vào cài đặt; "Xuất" tạo file `.xlsx`
-   (bảng tổng hợp bằng công thức, tham số nền vàng) và ảnh ROC.
+   (bảng tổng hợp bằng công thức, tham số nền vàng) và ảnh ROC (kèm 1 ảnh gộp tất cả).
 
 Chế độ **Chỉ test** (mục 2): không chia dev, mọi file ghép được đều dùng để đánh giá cấu hình
 đang lưu của user (model, merge, drop, pad) với ngưỡng chọn bằng slider; cho bảng chỉ số 3 chế độ,

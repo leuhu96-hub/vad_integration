@@ -155,6 +155,25 @@ fun GroupedBarChart(
     }
 }
 
+/**
+ * All ROC plots in one image: every panel is rendered with [renderRocBitmap] and laid out in a
+ * grid of [cols] columns (panels are given row by row).
+ */
+fun renderRocGridBitmap(panels: List<Pair<String, List<RocSeries>>>, cols: Int, sizePx: Int = 1200): Bitmap {
+    val n = panels.size.coerceAtLeast(1)
+    val c = cols.coerceIn(1, n)
+    val rows = (n + c - 1) / c
+    val bmp = Bitmap.createBitmap(c * sizePx, rows * sizePx, Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bmp)
+    canvas.drawColor(android.graphics.Color.WHITE)
+    panels.forEachIndexed { i, (title, series) ->
+        val panel = renderRocBitmap(title, series, sizePx)
+        canvas.drawBitmap(panel, (i % c) * sizePx.toFloat(), (i / c) * sizePx.toFloat(), null)
+        panel.recycle()
+    }
+    return bmp
+}
+
 /** Renders a ROC plot to a bitmap for export (white background, same colours as the app). */
 fun renderRocBitmap(title: String, series: List<RocSeries>, sizePx: Int = 1200): Bitmap {
     val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
