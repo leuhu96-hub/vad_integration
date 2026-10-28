@@ -86,6 +86,98 @@ class EvalTest {
         assertEquals(wins / pairs, Metrics.exactAuc(listOf(v), 0), 1e-9)
     }
 
+    /** Confusion with the given MR and FAR out of 1000 speech / 1000 non-speech bins. */
+    private fun conf(mr: Double, far: Double) = Conf(
+        tp = Math.round(1000 * (1 - mr)), fn = Math.round(1000 * mr), fp = Math.round(1000 * far), tn = Math.round(1000 * (1 - far)),
+    )
+
+    @Test
+    fun mrFarCostNeedsBothLimits() {
+        fun cost(c: Conf, x: Double = 0.03, y: Double = 0.10) = Metrics.cost(c, Criterion.MR_FAR, 0.75, x, y)
+        // Eligible: the cost is the larger fraction of its limit.
+        assertEquals(0.02 / 0.03, cost(conf(0.02, 0.05)), 1e-9)
+        assertEquals(0.09 / 0.10, cost(conf(0.01, 0.09)), 1e-9)
+        // Limits are inclusive.
+        assertEquals(1.0, cost(conf(0.03, 0.05)), 1e-9)
+        assertEquals(1.0, cost(conf(0.01, 0.10)), 1e-9)
+        // Either rate over its limit, or an undefined rate, makes the combination ineligible.
+        assertTrue(cost(conf(0.04, 0.05)).isNaN())
+        assertTrue(cost(conf(0.02, 0.12)).isNaN())
+        assertTrue(cost(Conf(0, 0, 5, 95)).isNaN())   // no speech bins: MR undefined
+        assertTrue(cost(Conf(95, 5, 0, 0)).isNaN())   // no non-speech bins: FAR undefined
+        assertTrue(cost(conf(0.01, 0.05), x = 0.0).isNaN())
+        assertTrue(cost(conf(0.01, 0.05), y = 0.0).isNaN())
+        // The other criteria ignore the FAR limit.
+        assertEquals(0.05, Metrics.cost(conf(0.02, 0.05), Criterion.MR_MAX, 0.75, 0.03, 0.001), 1e-9)
+    }
+
+    @Test
+    fun mrFarSelectsLargestMargin() {
+        val candidates = listOf(
+            conf(0.010, 0.090),   // margin 0.90
+            conf(0.025, 0.040),   // 0.833
+            conf(0.020, 0.060),   // 0.667  <- best
+            conf(0.050, 0.010),   // MR over the limit
+            conf(0.020, 0.060),   // same as #2: the first one wins the tie
+        )
+        val (k, cost) = Metrics.selectBy(candidates.size, { candidates[it] }, Criterion.MR_FAR, 0.75, 0.03, 0.10)
+        assertEquals(2, k)
+        assertEquals(0.02 / 0.03, cost, 1e-9)
+        // MR<=x alone would take the smallest FAR among MR <= 3 %: a different (less balanced) point.
+        assertEquals(1, Metrics.selectBy(candidates.size, { candidates[it] }, Criterion.MR_MAX, 0.75, 0.03, 0.10).first)
+        // Nothing eligible.
+        assertEquals(-1 to true, Metrics.selectBy(candidates.size, { candidates[it] }, Criterion.MR_FAR, 0.75, 0.005, 0.10)
+            .let { it.first to it.second.isNaN() })
+        // The value shown to the user is the margin itself (not negated).
+        assertEquals(cost, Metrics.costToValue(Criterion.MR_FAR, cost), 0.0)
+    }
+
+    @Test
+    fun searchWithMrFarLimits() = runBlocking {
+        val rnd = Random(5)
+        val items = dataset(rnd, 8)
+        val results = items.map { item ->
+            val n = item.gt.bins
+            val probs = FloatArray(n * 50) { j ->
+                val speech = item.gt.labels[j / 50].toInt() == 1
+                val p = if (speech) (if (rnd.nextInt(5) == 0) 0.1f else 0.8f) else (if (rnd.nextInt(20) == 0) 0.7f else 0.2f)
+                (p + (rnd.nextGaussian() * 0.1).toFloat()).coerceIn(0f, 1f)
+            }
+            result(probs, 0.01f, n * BIN_SEC)
+        }
+        val grid = SearchGrid(listOf(0, 300), listOf(0, 200), listOf(0, 100), listOf(0, 150), thrStep = 10)
+        val x = 0.4
+        val y = 0.4
+        val res = ParamSearch.search(
+            devFiles = items.size, load = { results[it] to items[it].gt },
+            segmenter = ::settingsSegmenter, grid = grid, ratio = 0.2f,
+            criterion = Criterion.MR_FAR, missWeight = 0.75, mrMax = x, farMax = y,
+        )
+        assertEquals(y, res.farMax, 0.0)
+        val best = res.best
+        assertTrue("some combination meets both limits", best != null)
+        val eligible = res.entries.filter { !it.cost.isNaN() }
+        assertTrue(eligible.isNotEmpty())
+        for (e in eligible) {
+            val c = e.conf[EvalMode.STRICT.ordinal]
+            // The reported confusion is at the chosen threshold, so both limits hold there.
+            assertTrue("MR ${c.mr}", c.mr <= x + 1e-9)
+            assertTrue("FAR ${c.far}", c.far <= y + 1e-9)
+            assertEquals(maxOf(c.mr / x, c.far / y), e.cost, 1e-9)
+            assertTrue(e.cost <= 1.0 + 1e-9)
+        }
+        // The winner has the smallest margin value and is ranked first.
+        assertEquals(eligible.minOf { it.cost }, best!!.cost, 0.0)
+        assertTrue(res.ranked().first() === best)
+        // Tightening the limits can only shrink the eligible set.
+        val tight = ParamSearch.search(
+            devFiles = items.size, load = { results[it] to items[it].gt },
+            segmenter = ::settingsSegmenter, grid = grid, ratio = 0.2f,
+            criterion = Criterion.MR_FAR, missWeight = 0.75, mrMax = x / 4, farMax = y / 4,
+        )
+        assertTrue(tight.entries.count { !it.cost.isNaN() } <= eligible.size)
+    }
+
     @Test
     fun splitIsStratifiedAndBalanced() {
         val items = dataset(Random(7), 90)

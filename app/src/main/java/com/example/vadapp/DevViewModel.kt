@@ -320,6 +320,7 @@ class DevViewModel(app: Application) : AndroidViewModel(app) {
                         segmenter = { r, st -> NativeVad.segments(m, r, st) },
                         grid = s.grid, ratio = s.binRatio,
                         criterion = params.criterion, missWeight = params.missWeight, mrMax = params.mrMax,
+                        farMax = params.farMax,
                         keepGoing = { job?.isActive != false },
                         onFileDone = { n ->
                             val elapsed = System.currentTimeMillis() - started
@@ -373,7 +374,8 @@ class DevViewModel(app: Application) : AndroidViewModel(app) {
     fun searchOutdated(st: DevState = _state.value): Boolean = st.evals.any { e ->
         val r = e.search ?: return@any false
         r.criterion != st.params.criterion || r.missWeight != st.params.missWeight ||
-            (r.criterion == Criterion.MR_MAX && r.mrMax != st.params.mrMax)
+            ((r.criterion == Criterion.MR_MAX || r.criterion == Criterion.MR_FAR) && r.mrMax != st.params.mrMax) ||
+            (r.criterion == Criterion.MR_FAR && r.farMax != st.params.farMax)
     }
 
     private fun fmtDuration(sec: Long) = if (sec >= 3600) "%dh%02d".format(sec / 3600, sec / 60 % 60)

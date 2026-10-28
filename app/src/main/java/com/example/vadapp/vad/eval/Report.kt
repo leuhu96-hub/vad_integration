@@ -42,6 +42,8 @@ data class SelectParams(
     val fpr1: Double = 0.01,
     val fpr2: Double = 0.05,
     val mrMax: Double = 0.05,
+    /** FAR limit of [Criterion.MR_FAR] (MR limit is [mrMax]). */
+    val farMax: Double = DEFAULT_FAR_MAX,
 )
 
 /** Table A row: threshold choice on dev (strict) for one configuration. */
@@ -50,7 +52,7 @@ class ConfigRow(
     val thrDcf: Int, val dcfMin: Double,
     val thrF1: Int, val f1Max: Double,
     val thrYouden: Int, val youdenMax: Double,
-    val thrEer: Int, val thrMr: Int,
+    val thrEer: Int, val thrMr: Int, val thrMrFar: Int,
     val aucDev: DoubleArray, val aucTest: DoubleArray,
     /** Only for A0 (threshold-free), NaN otherwise. */
     val exactAucDev: DoubleArray, val exactAucTest: DoubleArray,
@@ -94,7 +96,7 @@ class ModelSummary(
             val strict = EvalMode.STRICT.ordinal
             val rows = PostConfig.entries.map { cfg ->
                 val c = cfg.ordinal
-                fun sel(cr: Criterion) = Metrics.select(e.devSweep, c, strict, cr, p.missWeight, p.mrMax)
+                fun sel(cr: Criterion) = Metrics.select(e.devSweep, c, strict, cr, p.missWeight, p.mrMax, p.farMax)
                 val kDcf = sel(Criterion.DCF_MIN)
                 val kF1 = sel(Criterion.F1_MAX)
                 val kJ = sel(Criterion.YOUDEN)
@@ -104,7 +106,7 @@ class ModelSummary(
                     thrDcf = kDcf, dcfMin = at(kDcf)?.dcf(p.missWeight) ?: Double.NaN,
                     thrF1 = kF1, f1Max = at(kF1)?.f1 ?: Double.NaN,
                     thrYouden = kJ, youdenMax = at(kJ)?.let { it.recall - it.far } ?: Double.NaN,
-                    thrEer = sel(Criterion.EER), thrMr = sel(Criterion.MR_MAX),
+                    thrEer = sel(Criterion.EER), thrMr = sel(Criterion.MR_MAX), thrMrFar = sel(Criterion.MR_FAR),
                     aucDev = DoubleArray(3) { Metrics.auc(Metrics.roc(e.devSweep, c, it)) },
                     aucTest = DoubleArray(3) { Metrics.auc(Metrics.roc(e.testSweep, c, it)) },
                     exactAucDev = if (cfg == PostConfig.A0) e.exactAucDev else DoubleArray(3) { Double.NaN },

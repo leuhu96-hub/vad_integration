@@ -48,9 +48,12 @@ Chọn tham số tốt nhất cho user từ một bộ dữ liệu có ground tr
    Bin 0.5 s là speech khi phần speech ≥ tỷ lệ chọn (mặc định 20 %).
    Bật "Tìm bộ hậu xử lý tối ưu" để thử mọi tổ hợp merge × drop × pre pad × post pad × ngưỡng
    (grid sửa được) trên tập dev theo tiêu chí đang chọn; tổ hợp tốt nhất thành cấu hình **A5**.
-4. Chọn ngưỡng trên dev (DCF-min / F1-max / Youden / EER / MR ≤ x), đánh giá trên test ở 3 chế độ:
+4. Chọn ngưỡng trên dev (DCF-min / F1-max / Youden / EER / MR ≤ x / MR ≤ x và FAR ≤ y), đánh giá trên test ở 3 chế độ:
    strict (mọi bin), collar ±1 bin (bỏ bin biên), chỉ bin biên → TP FN FP TN MR FAR Precision Recall
    F1 Specificity DCF + CI95 bootstrap theo file, ROC/AUC, so sánh model, theo nhóm.
+   Tiêu chí "MR ≤ x và FAR ≤ y" chỉ nhận các bộ có cả hai tỷ lệ trong giới hạn (strict, trên dev) và chọn bộ có
+   max(MR/x, FAR/y) nhỏ nhất, tức biên an toàn lớn nhất. Không bộ nào thỏa thì không chọn được (hiển thị "–").
+   Nên đặt x, y chặt hơn mục tiêu một chút vì kết quả trên test thường kém hơn dev.
 5. "Áp dụng cho user" ghi ngưỡng + tham số của cấu hình vào cài đặt; "Xuất" tạo file `.xlsx`
    (bảng tổng hợp bằng công thức, tham số nền vàng) và ảnh ROC.
 

@@ -98,13 +98,13 @@ fun ModelSummaryTables(ms: ModelSummary, params: SelectParams, testOnly: Boolean
             DataTable(
                 header = listOf(
                     "Cấu hình", "Ngưỡng DCF-min", "DCF min", "Ngưỡng F1-max", "F1 max", "Ngưỡng Youden",
-                    "Ngưỡng EER", "Ngưỡng MR≤x", "AUC dev", "AUC test", "AUC chính xác dev/test",
+                    "Ngưỡng EER", "Ngưỡng MR≤x", "Ngưỡng MR&FAR", "AUC dev", "AUC test", "AUC chính xác dev/test",
                     "TPR@FPR ${fmtPct(params.fpr1)}", "TPR@FPR ${fmtPct(params.fpr2)}", "Ngưỡng dùng",
                 ),
                 rows = ms.rows.map { r ->
                     listOf(
                         "${r.config.code} · ${ms.eval.describe(r.config)}", fmtThr(r.thrDcf), fmt3(r.dcfMin), fmtThr(r.thrF1),
-                        fmt3(r.f1Max), fmtThr(r.thrYouden), fmtThr(r.thrEer), fmtThr(r.thrMr), fmt3(r.aucDev[0]),
+                        fmt3(r.f1Max), fmtThr(r.thrYouden), fmtThr(r.thrEer), fmtThr(r.thrMr), fmtThr(r.thrMrFar), fmt3(r.aucDev[0]),
                         fmt3(r.aucTest[0]),
                         if (r.config == PostConfig.A0) "${fmt3(r.exactAucDev[0])} / ${fmt3(r.exactAucTest[0])}" else "",
                         fmtPct(r.tprFpr1), fmtPct(r.tprFpr2), fmtThr(r.used),

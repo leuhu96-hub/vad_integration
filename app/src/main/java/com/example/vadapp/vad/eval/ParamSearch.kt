@@ -77,6 +77,7 @@ class SearchResult(
     val criterion: Criterion,
     val missWeight: Double,
     val mrMax: Double,
+    val farMax: Double,
     val devFiles: Int,
     val elapsedMs: Long,
 ) {
@@ -130,6 +131,8 @@ object ParamSearch {
         criterion: Criterion,
         missWeight: Double,
         mrMax: Double,
+        /** FAR limit of [Criterion.MR_FAR]; unused by the other criteria. */
+        farMax: Double = DEFAULT_FAR_MAX,
         keepGoing: () -> Boolean = { true },
         onFileDone: (done: Int) -> Unit = {},
         /** Source of the parameters the grid does not search (e.g. FireRedVAD max speech). */
@@ -172,7 +175,7 @@ object ParamSearch {
 
         val strict = EvalMode.STRICT.ordinal
         val entries = combos.mapIndexed { c, combo ->
-            val (ti, cost) = Metrics.selectBy(t, { Conf.of(total, at(c, it, strict)) }, criterion, missWeight, mrMax)
+            val (ti, cost) = Metrics.selectBy(t, { Conf.of(total, at(c, it, strict)) }, criterion, missWeight, mrMax, farMax)
             val k = if (ti >= 0) thr[ti] else -1
             SearchEntry(
                 settings = combo.copy(threshold = if (k >= 0) thresholdAt(k) else 0f),
@@ -181,6 +184,6 @@ object ParamSearch {
                 conf = List(MODES) { m -> if (ti >= 0) Conf.of(total, at(c, ti, m)) else Conf.ZERO },
             )
         }
-        return SearchResult(grid, withSmooth, entries, criterion, missWeight, mrMax, devFiles, System.currentTimeMillis() - started)
+        return SearchResult(grid, withSmooth, entries, criterion, missWeight, mrMax, farMax, devFiles, System.currentTimeMillis() - started)
     }
 }

@@ -368,10 +368,17 @@ private fun ParamsSection(st: DevState, vm: DevViewModel) = Section(if (st.testO
     SliderRow("Trọng số miss DCF", String.format(Locale.US, "%.2f", p.missWeight), p.missWeight.toFloat(), 0f..1f, steps = 19) {
         vm.setParams(p.copy(missWeight = (it * 20).roundToInt() / 20.0))
     }
-    if (p.criterion == Criterion.MR_MAX && !st.testOnly) {
-        SliderRow("MR tối đa", fmtPct(p.mrMax), p.mrMax.toFloat(), 0.01f..0.3f, steps = 28) {
-            vm.setParams(p.copy(mrMax = (it * 100).roundToInt() / 100.0))
+    if ((p.criterion == Criterion.MR_MAX || p.criterion == Criterion.MR_FAR) && !st.testOnly) {
+        SliderRow("MR tối đa", fmtPct(p.mrMax), p.mrMax.toFloat(), 0.005f..0.3f, steps = 58) {
+            vm.setParams(p.copy(mrMax = (it * 200).roundToInt() / 200.0))
         }
+    }
+    if (p.criterion == Criterion.MR_FAR && !st.testOnly) {
+        SliderRow("FAR tối đa", fmtPct(p.farMax), p.farMax.toFloat(), 0.01f..0.5f, steps = 48) {
+            vm.setParams(p.copy(farMax = (it * 100).roundToInt() / 100.0))
+        }
+        Hint("Cả hai giới hạn phải thỏa trên dev (strict). Trong các bộ thỏa, chọn bộ có max(MR/x, FAR/y) nhỏ nhất " +
+            "(biên an toàn lớn nhất). Để chừa biên cho test, đặt x, y chặt hơn mục tiêu một chút.")
     }
     ChipRow("Mốc FPR 1", listOf(0.005, 0.01, 0.02), p.fpr1, { fmtPct(it) }) { vm.setParams(p.copy(fpr1 = it)) }
     ChipRow("Mốc FPR 2", listOf(0.05, 0.1, 0.2), p.fpr2, { fmtPct(it) }) { vm.setParams(p.copy(fpr2 = it)) }
@@ -483,6 +490,10 @@ private fun SearchControls(st: DevState, vm: DevViewModel) {
             vm.setParams(p.copy(missWeight = (it * 20).roundToInt() / 20.0))
         }
     }
+    if (p.criterion == Criterion.MR_MAX || p.criterion == Criterion.MR_FAR) {
+        Hint("Giới hạn MR${if (p.criterion == Criterion.MR_FAR) "/FAR" else ""} chỉnh ở mục 4 (x = ${fmtPct(p.mrMax)}" +
+            (if (p.criterion == Criterion.MR_FAR) ", y = ${fmtPct(p.farMax)}" else "") + ").")
+    }
     val devFiles = st.split?.devIndices()?.size ?: 0
     val models = st.models.filter { it.value.enabled && it.value.source != null }.keys
     val combos = models.sumOf { g.size(it == VadModelType.FIRERED).toLong() }
@@ -521,7 +532,12 @@ private fun SearchSection(ms: ModelSummary, st: DevState, vm: DevViewModel) {
     val r = ms.eval.search ?: return
     Section("Tìm tham số · ${ms.model.label}") {
         val best = r.best
-        val name = r.criterion.label + if (r.criterion == Criterion.DCF_MIN) " (w = ${r.missWeight})" else ""
+        val name = r.criterion.label + when (r.criterion) {
+            Criterion.DCF_MIN -> " (w = ${r.missWeight})"
+            Criterion.MR_MAX -> " (x = ${fmtPct(r.mrMax)})"
+            Criterion.MR_FAR -> " (x = ${fmtPct(r.mrMax)}, y = ${fmtPct(r.farMax)})"
+            else -> ""
+        }
         Text(
             "${r.entries.size} tổ hợp × ${r.grid.thresholds.size} ngưỡng trên ${r.devFiles} file dev · " +
                 "${r.elapsedMs / 1000} s · tiêu chí $name",
@@ -547,7 +563,7 @@ private fun SearchSection(ms: ModelSummary, st: DevState, vm: DevViewModel) {
         val a5 = ms.rows[PostConfig.A5.ordinal]
         val p = st.params
         fun objective(row: Int) = Metrics.selectBy(
-            NUM_THR, { Metrics.conf(ms.eval.devSweep, row, it, 0) }, r.criterion, r.missWeight, r.mrMax,
+            NUM_THR, { Metrics.conf(ms.eval.devSweep, row, it, 0) }, r.criterion, r.missWeight, r.mrMax, r.farMax,
         ).second.let { Metrics.costToValue(r.criterion, it) }
         Text(
             "Dev, lưới ngưỡng 0.01: A4 ${fmt3(objective(a4.config.ordinal))} → A5 ${fmt3(objective(a5.config.ordinal))} · " +

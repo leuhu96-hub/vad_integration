@@ -39,6 +39,7 @@ class XlsxReport(
     private val pFpr1 = "\$B\$9"
     private val pFpr2 = "\$B\$10"
     private val pMrMax = "\$B\$11"
+    private val pFarMax = "\$B\$17"
     private val pAppCfg = "\$B\$13"
     private val pAppCrit = "\$B\$14"
     private val pAppWeight = "\$B\$15"
@@ -74,7 +75,7 @@ class XlsxReport(
         s.str(2, 0, "Nguồn: video \"$videoRoot\", GT \"$gtRoot\", chạy $date trên thiết bị. ${items.size} file " +
             "(dev $nDev / test ${items.size - nDev}, tỷ lệ dev ${pct(split.devRatio.toDouble())}), bin GT ${BIN_SEC}s, " +
             "bin là speech khi ≥ ${pct(binRatio.toDouble())} thời lượng có speech.", Style.NOTE)
-        s.str(3, 0, "Nền vàng = tham số bạn chỉnh (B6:B11) · chữ đen = công thức · chữ xanh = số nhập từ app " +
+        s.str(3, 0, "Nền vàng = tham số bạn chỉnh (B6:B11, B17) · chữ đen = công thức · chữ xanh = số nhập từ app " +
             "(bootstrap CI, AUC, đếm theo nhóm; không tính lại trong Excel). Đổi tham số thì mọi bảng tự tính lại; " +
             "hình ROC (PNG) thì không.", Style.NOTE)
 
@@ -87,15 +88,16 @@ class XlsxReport(
         s.listValidation("B8", Criterion.entries.map { it.excel })
         s.str(9, 0, "Mốc FPR 1 (TPR@FPR)"); s.num(9, 1, params.fpr1, Style.PARAM_PCT)
         s.str(10, 0, "Mốc FPR 2 (TPR@FPR)"); s.num(10, 1, params.fpr2, Style.PARAM_PCT)
-        s.str(11, 0, "MR tối đa (cho tiêu chí MR<=x)"); s.num(11, 1, params.mrMax, Style.PARAM_PCT)
+        s.str(11, 0, "MR tối đa (cho tiêu chí MR<=x và MR&FAR)"); s.num(11, 1, params.mrMax, Style.PARAM_PCT)
         s.str(12, 0, "Tỷ lệ speech tối thiểu trong bin (app)"); s.num(12, 1, binRatio.toDouble(), Style.BLUE_PCT)
         s.str(13, 0, "Cấu hình app đã dùng"); s.str(13, 1, params.config.code, Style.BLUE)
         s.str(14, 0, "Tiêu chí app đã dùng"); s.str(14, 1, params.criterion.excel, Style.BLUE)
         s.str(15, 0, "Trọng số DCF app đã dùng"); s.num(15, 1, params.missWeight, Style.BLUE_DEC2)
         s.str(16, 0, "Chỉ số cấu hình B7 (phụ)", Style.NOTE)
         s.formula(16, 1, "MATCH($pConfig,{$cfgList},0)-1", Style.INT)
+        s.str(17, 0, "FAR tối đa (cho tiêu chí MR&FAR)"); s.num(17, 1, params.farMax, Style.PARAM_PCT)
 
-        var r = 18
+        var r = 19
         val strictRowOf = HashMap<Int, Int>()
         val usedCellOf = HashMap<Int, String>()
         val tableARowOf = HashMap<Int, Int>()
@@ -133,7 +135,7 @@ class XlsxReport(
                     "Cấu hình", "Mô tả", "Ngưỡng DCF-min (dev)", "DCF min (dev)", "Ngưỡng F1-max (dev)", "F1 max (dev)",
                     "Ngưỡng Youden (dev)", "J max (dev)", "Ngưỡng EER (dev)", "Ngưỡng MR<=x (dev)", "AUC dev (lưới ngưỡng)",
                     "AUC test (lưới ngưỡng)", "AUC chính xác dev", "AUC chính xác test", "TPR@FPR1 (dev)", "TPR@FPR2 (dev)",
-                    "Ngưỡng dùng (theo B8)",
+                    "Ngưỡng dùng (theo B8)", "Ngưỡng MR&FAR (dev)",
                 )
                 headA.forEachIndexed { c, h -> s.str(r + 6, c, h, Style.HEADER) }
                 configs.forEachIndexed { c, cfg ->
@@ -160,7 +162,9 @@ class XlsxReport(
                     s.num(row, 13, row0.exactAucTest[0], Style.BLUE_DEC3)
                     s.formula(row, 14, "IFERROR(SUMPRODUCT(MAX((${rng("K")}<=$pFpr1)*${rng("M")})),\"\")", Style.PCT)
                     s.formula(row, 15, "IFERROR(SUMPRODUCT(MAX((${rng("K")}<=$pFpr2)*${rng("M")})),\"\")", Style.PCT)
-                    s.formula(row, 16, "IFERROR(CHOOSE(MATCH($pCrit,{$critList},0),C$row,E$row,G$row,I$row,J$row),\"\")", Style.DEC2)
+                    // Column R sits after Q so no existing column letter moves; the CHOOSE order is Criterion.entries.
+                    s.formula(row, 17, argOpt("MIN", "T"), Style.DEC2)
+                    s.formula(row, 16, "IFERROR(CHOOSE(MATCH($pCrit,{$critList},0),C$row,E$row,G$row,I$row,J$row,R$row),\"\")", Style.DEC2)
                 }
             }
 
@@ -258,13 +262,14 @@ class XlsxReport(
     private fun writeSweep(s: XlsxWriter.Sheet) {
         val head = listOf(
             "Model", "Cấu hình", "Tập", "Chế độ", "Ngưỡng", "TP", "FN", "FP", "TN", "MR", "FAR", "Precision",
-            "Recall", "F1", "Specificity", "DCF", "Youden J", "|MR − FAR|", "FAR nếu MR<=x",
+            "Recall", "F1", "Specificity", "DCF", "Youden J", "|MR − FAR|", "FAR nếu MR<=x", "Biên MR&FAR",
         )
         head.forEachIndexed { c, h -> s.str(1, c, h, Style.HEADER) }
         s.freeze(1)
         s.width(0, 14.0); s.width(3, 8.0)
         val w = "$sum$pWeight"
         val mrMax = "$sum$pMrMax"
+        val farMax = "$sum$pFarMax"
         summaries.forEachIndexed { m, ms ->
             for (set in 0..1) {
                 val sweep = if (set == 0) ms.eval.devSweep else ms.eval.testSweep
@@ -292,6 +297,10 @@ class XlsxReport(
                         s.formula(r, 16, "IF(OR(M$r=\"\",K$r=\"\"),\"\",M$r-K$r)", Style.DEC3)
                         s.formula(r, 17, "IF(OR(J$r=\"\",K$r=\"\"),\"\",ABS(J$r-K$r))", Style.DEC3)
                         s.formula(r, 18, "IF(OR(J$r=\"\",K$r=\"\"),\"\",IF(J$r<=$mrMax,K$r,\"\"))", Style.PCT)
+                        // Same as Metrics.cost(MR_FAR): eligible iff both rates are within their limits,
+                        // value = the larger fraction of its limit (smaller = more margin).
+                        s.formula(r, 19, "IF(OR(J$r=\"\",K$r=\"\",$mrMax<=0,$farMax<=0),\"\"," +
+                            "IF(AND(J$r<=$mrMax,K$r<=$farMax),MAX(J$r/$mrMax,K$r/$farMax),\"\"))", Style.DEC3)
                     }
                 }
             }
@@ -401,7 +410,12 @@ class XlsxReport(
         val w = "$sum$pWeight"
         for (ms in summaries) {
             val res = ms.eval.search ?: continue
-            val crit = res.criterion.excel + if (res.criterion == Criterion.DCF_MIN) " w=${res.missWeight}" else ""
+            val crit = res.criterion.excel + when (res.criterion) {
+                Criterion.DCF_MIN -> " w=${res.missWeight}"
+                Criterion.MR_MAX -> " x=${pct(res.mrMax)}"
+                Criterion.MR_FAR -> " x=${pct(res.mrMax)} y=${pct(res.farMax)}"
+                else -> ""
+            }
             res.ranked().forEachIndexed { rank, e ->
                 val st = e.settings
                 val c = e.conf[EvalMode.STRICT.ordinal]

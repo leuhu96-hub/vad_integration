@@ -50,7 +50,16 @@ enum class Criterion(val label: String, val excel: String) {
     YOUDEN("Youden J", "Youden"),
     EER("EER (MR = FAR)", "EER"),
     MR_MAX("MR ≤ x, FAR nhỏ nhất", "MR<=x"),
+    /**
+     * Both rates must stay within their limits (MR ≤ x and FAR ≤ y); among the eligible ones the
+     * best is the one with the largest safety margin, i.e. the smallest max(MR / x, FAR / y).
+     * Appended last: the workbook picks its threshold column by the index of this entry.
+     */
+    MR_FAR("MR ≤ x và FAR ≤ y, biên lớn nhất", "MR&FAR"),
 }
+
+/** Default FAR limit of [Criterion.MR_FAR]. */
+const val DEFAULT_FAR_MAX = 0.10
 
 private val NUM_CONFIG = PostConfig.entries.size
 private val NUM_MODE = EvalMode.entries.size
@@ -247,17 +256,20 @@ object Metrics {
      * Index of the best threshold by [criterion], or -1. Ties go to the lowest threshold
      * (same as MATCH in the exported workbook).
      */
-    fun select(sweep: IntArray, c: Int, mode: Int, criterion: Criterion, missWeight: Double, mrMax: Double): Int =
-        selectBy(NUM_THR, { conf(sweep, c, it, mode) }, criterion, missWeight, mrMax).first
+    fun select(
+        sweep: IntArray, c: Int, mode: Int, criterion: Criterion, missWeight: Double, mrMax: Double,
+        farMax: Double = DEFAULT_FAR_MAX,
+    ): Int = selectBy(NUM_THR, { conf(sweep, c, it, mode) }, criterion, missWeight, mrMax, farMax).first
 
     /** Best index among [n] candidates and its [cost]; (-1, NaN) if none is eligible. First wins ties. */
     fun selectBy(
         n: Int, confAt: (Int) -> Conf, criterion: Criterion, missWeight: Double, mrMax: Double,
+        farMax: Double = DEFAULT_FAR_MAX,
     ): Pair<Int, Double> {
         var best = -1
         var bestV = Double.NaN
         for (k in 0 until n) {
-            val v = cost(confAt(k), criterion, missWeight, mrMax)
+            val v = cost(confAt(k), criterion, missWeight, mrMax, farMax)
             if (v.isNaN()) continue
             if (best < 0 || v < bestV) { best = k; bestV = v }
         }
@@ -265,12 +277,19 @@ object Metrics {
     }
 
     /** Value to minimise for [criterion]; NaN = not eligible. */
-    fun cost(x: Conf, criterion: Criterion, missWeight: Double, mrMax: Double): Double = when (criterion) {
+    fun cost(
+        x: Conf, criterion: Criterion, missWeight: Double, mrMax: Double, farMax: Double = DEFAULT_FAR_MAX,
+    ): Double = when (criterion) {
         Criterion.DCF_MIN -> x.dcf(missWeight)
         Criterion.F1_MAX -> -x.f1
         Criterion.YOUDEN -> -(x.recall - x.far)
         Criterion.EER -> abs(x.mr - x.far)
         Criterion.MR_MAX -> if (!x.mr.isNaN() && x.mr <= mrMax + 1e-12) x.far else Double.NaN
+        // Same expression as column T of the workbook sheet "Quét ngưỡng".
+        Criterion.MR_FAR ->
+            if (x.mr.isNaN() || x.far.isNaN() || mrMax <= 0.0 || farMax <= 0.0) Double.NaN
+            else if (x.mr <= mrMax + 1e-12 && x.far <= farMax + 1e-12) max(x.mr / mrMax, x.far / farMax)
+            else Double.NaN
     }
 
     /** [cost] back in the criterion's own units (F1 and J are maximised). */
