@@ -8,6 +8,7 @@ Models (trong `app/src/main/assets/models/`):
 | Model | File | Đầu vào | Bước | Hậu xử lý |
 |---|---|---|---|---|
 | FireRedVAD | `fireredvad_vad.onnx` + `cmvn.ark` | fbank 80 (Kaldi) + CMVN | 10 ms | port `VadPostprocessor` gốc |
+| FireRedVAD AED | `fireredvad_aed.onnx` + `cmvn.ark` | như FireRedVAD | 10 ms | 3 đầu ra (speech, singing, music); speech là đường xác suất chính, singing/music hiển thị thêm, mỗi nhãn có ngưỡng riêng (mặc định 0.4 / 0.5 / 0.5) |
 | Silero VAD v6 | `silero_vad.onnx` | 512 mẫu + 64 mẫu context, state | 32 ms | port `get_speech_timestamps` |
 | YAMNet | `yamnet.onnx` (tf2onnx) | waveform, frontend nằm trong graph | 0.48 s | max(Speech, Child speech, Conversation, Narration) ≥ ngưỡng, gộp/lọc |
 

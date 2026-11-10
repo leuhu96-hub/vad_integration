@@ -32,7 +32,16 @@ class AnalysisResult(
     /** Peak amplitude of the 16 kHz mono signal per [envelopeHopSec] bucket, normalised to 0..1. */
     val envelope: FloatArray,
     val envelopeHopSec: Float,
-)
+    /**
+     * AED only: the channels after speech (see [AedEvent]) one after another, each [probs].size
+     * long, on the same time axis as [probs]. Empty for every other model.
+     */
+    val eventProbs: FloatArray = FloatArray(0),
+) {
+    val eventCount: Int get() = if (probs.isEmpty()) 0 else eventProbs.size / probs.size
+
+    fun eventTrack(index: Int): FloatArray = eventProbs.copyOfRange(index * probs.size, (index + 1) * probs.size)
+}
 
 data class Segment(val startSec: Float, val endSec: Float) {
     val durationSec get() = endSec - startSec
@@ -104,5 +113,26 @@ object NativeVad {
             settings.prePadMs, settings.postPadMs, settings.smoothWindowMs, settings.maxSpeechSec,
         )
         return List(flat.size / 2) { Segment(flat[2 * it], flat[2 * it + 1]) }
+    }
+
+    /**
+     * Segments of every [AedEvent] channel of an AED [result], thresholded with [thresholds]
+     * (one per event, in [AedEvent] order) and cleaned up like speech (same smoothing, minimum
+     * length and silence merge as [settings]). Empty map for models without events.
+     */
+    fun eventSegments(
+        result: AnalysisResult, settings: SegmentSettings, thresholds: Map<AedEvent, Float>,
+    ): Map<AedEvent, List<Segment>> {
+        val n = minOf(result.eventCount, AedEvent.entries.size)
+        if (n == 0) return emptyMap()
+        return AedEvent.entries.take(n).associateWith { ev ->
+            val flat = segment(
+                VadModelType.FIRERED.id, result.eventTrack(ev.ordinal), result.hopSec, result.offsetSec,
+                result.durationSec, thresholds[ev] ?: ev.defaultThreshold,
+                settings.minSpeechMs, settings.minSilenceMs, settings.prePadMs, settings.postPadMs,
+                settings.smoothWindowMs, settings.maxSpeechSec,
+            )
+            List(flat.size / 2) { Segment(flat[2 * it], flat[2 * it + 1]) }
+        }
     }
 }

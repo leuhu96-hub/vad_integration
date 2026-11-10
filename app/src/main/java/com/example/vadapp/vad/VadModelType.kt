@@ -34,8 +34,24 @@ enum class VadModelType(
     YAMNET(
         2, "YAMNet", "Speech/non-speech theo cửa sổ 0.96 s, bước 0.08 s", "yamnet",
         SegmentSettings(threshold = 0.3f, minSpeechMs = 250, minSilenceMs = 500, prePadMs = 0, postPadMs = 0),
+    ),
+    FIRERED_AED(
+        3, "FireRedVAD AED", "Như FireRedVAD, thêm nhãn singing và music (3 đầu ra / khung 10 ms)", "fireredvad_aed",
+        SegmentSettings(threshold = 0.4f, minSpeechMs = 200, minSilenceMs = 200, prePadMs = 0, postPadMs = 0),
     );
 
     /** Extra file the native runner needs besides the network itself. */
-    val extraAsset: String? get() = if (this == FIRERED) "asset:models/cmvn.ark" else null
+    val extraAsset: String? get() = if (usesFireRedFrontEnd) "asset:models/cmvn.ark" else null
+
+    /** fbank 80 + CMVN front end, 10 ms frames and the FireRedVAD post-processor (smoothing, max length). */
+    val usesFireRedFrontEnd: Boolean get() = this == FIRERED || this == FIRERED_AED
+
+    /** AED models also output [AedEvent] channels next to speech. */
+    val hasEvents: Boolean get() = this == FIRERED_AED
+}
+
+/** Extra AED channels after speech, in output order. Thresholds follow the reference AED config. */
+enum class AedEvent(val label: String, val defaultThreshold: Float) {
+    SINGING("Hát (singing)", 0.5f),
+    MUSIC("Nhạc (music)", 0.5f),
 }

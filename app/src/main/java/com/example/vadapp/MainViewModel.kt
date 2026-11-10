@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import com.example.vadapp.vad.AedEvent
 import com.example.vadapp.vad.AnalysisResult
 import com.example.vadapp.vad.ModelRegistry
 import com.example.vadapp.vad.ModelSource
@@ -41,6 +42,9 @@ data class UiState(
     val progress: Float = 0f,
     val result: AnalysisResult? = null,
     val segments: List<Segment> = emptyList(),
+    /** AED models only: segments of the singing / music channels (empty for other models). */
+    val eventSegments: Map<AedEvent, List<Segment>> = emptyMap(),
+    val eventThresholds: Map<AedEvent, Float> = AedEvent.entries.associateWith { it.defaultThreshold },
     val error: String? = null,
 ) {
     val currentSettings: SegmentSettings get() = settings.getValue(model)
@@ -151,7 +155,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun selectVideo(uri: Uri) {
         val name = queryName(uri)
         cache.keys.removeAll { it.video != uri }
-        _ui.update { it.copy(videoUri = uri, videoName = name, result = null, segments = emptyList(), error = null) }
+        _ui.update { it.copy(videoUri = uri, videoName = name, result = null, segments = emptyList(), eventSegments = emptyMap(), error = null) }
         stopAtMs = -1
         _playback.update { PlaybackState(speechOnly = it.speechOnly) }
         player.setMediaItem(MediaItem.fromUri(uri))
@@ -170,6 +174,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun resetSettings() = updateSettings(_ui.value.model.defaults)
 
+    /** AED only: threshold of the singing / music channel (not persisted, resets to the reference 0.5). */
+    fun setEventThreshold(event: AedEvent, threshold: Float) {
+        val state = _ui.value
+        val thresholds = state.eventThresholds + (event to threshold)
+        val result = state.result
+        // Only the event channels change: leave speech segments and playback untouched.
+        val events = if (result != null && state.model.hasEvents) {
+            NativeVad.eventSegments(result, state.currentSettings, thresholds)
+        } else emptyMap()
+        _ui.update { it.copy(eventThresholds = thresholds, eventSegments = events) }
+    }
+
     fun cancelAnalysis() {
         analysisJob?.cancel()
     }
@@ -182,7 +198,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val source = state.currentSource
         if (source == null) {
             _ui.update {
-                it.copy(analyzing = false, result = null, segments = emptyList(),
+                it.copy(analyzing = false, result = null, segments = emptyList(), eventSegments = emptyMap(),
                     error = "Không có file model cho ${model.label} (.onnx hoặc .tflite)")
             }
             return
@@ -196,7 +212,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
 
-        _ui.update { it.copy(analyzing = true, progress = 0f, result = null, segments = emptyList(), error = null) }
+        _ui.update { it.copy(analyzing = true, progress = 0f, result = null, segments = emptyList(), eventSegments = emptyMap(), error = null) }
         analysisJob = viewModelScope.launch {
             try {
                 val result = withContext(Dispatchers.Default) {
@@ -230,7 +246,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val state = _ui.value
         val result = state.result ?: return
         val segments = NativeVad.segments(state.model, result, state.currentSettings)
-        _ui.update { it.copy(segments = segments) }
+        val events = if (state.model.hasEvents) {
+            NativeVad.eventSegments(result, state.currentSettings, state.eventThresholds)
+        } else emptyMap()
+        _ui.update { it.copy(segments = segments, eventSegments = events) }
         stopAtMs = -1
         _playback.update { it.copy(playingSegment = -1) }
     }

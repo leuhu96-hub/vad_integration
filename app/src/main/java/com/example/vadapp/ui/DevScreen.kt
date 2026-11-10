@@ -328,7 +328,7 @@ private fun ModelsSection(st: DevState, vm: DevViewModel) = Section("3. Model & 
                 SliderRow("Post pad", "${s.postPadMs} ms", s.postPadMs.toFloat(), 0f..500f) {
                     vm.setModelSettings(m, s.copy(postPadMs = (it / 10).roundToInt() * 10))
                 }
-                if (m == VadModelType.FIRERED) {
+                if (m.usesFireRedFrontEnd) {
                     SliderRow("Làm mượt", "${s.smoothWindowMs} ms", s.smoothWindowMs.toFloat(), 10f..300f) {
                         vm.setModelSettings(m, s.copy(smoothWindowMs = (it / 10).roundToInt() * 10))
                     }
@@ -475,10 +475,10 @@ private fun SearchControls(st: DevState, vm: DevViewModel) {
     GridField("Drop: speech < (ms)", g.drop) { vm.setGrid(g.copy(drop = it)) }
     GridField("Pre pad (ms)", g.prePad) { vm.setGrid(g.copy(prePad = it)) }
     GridField("Post pad (ms)", g.postPad) { vm.setGrid(g.copy(postPad = it)) }
-    val fireRed = st.models[VadModelType.FIRERED]?.let { it.enabled && it.source != null } == true
+    val fireRed = st.models.any { (m, c) -> m.usesFireRedFrontEnd && c.enabled && c.source != null }
     if (fireRed) {
         GridField("Làm mượt FireRedVAD (ms)", g.smooth) { vm.setGrid(g.copy(smooth = it)) }
-        Hint("Chỉ áp dụng cho FireRedVAD (bước 10 ms, < 20 ms = không làm mượt). Nhập một giá trị để cố định.")
+        Hint("Chỉ áp dụng cho FireRedVAD và FireRedVAD AED (bước 10 ms, < 20 ms = không làm mượt). Nhập một giá trị để cố định.")
     }
     ChipRow("Bước ngưỡng khi tìm", listOf(5, 2, 1), g.thrStep, { String.format(Locale.US, "%.2f", it / 100.0) }) {
         vm.setGrid(g.copy(thrStep = it))
@@ -496,7 +496,7 @@ private fun SearchControls(st: DevState, vm: DevViewModel) {
     }
     val devFiles = st.split?.devIndices()?.size ?: 0
     val models = st.models.filter { it.value.enabled && it.value.source != null }.keys
-    val combos = models.sumOf { g.size(it == VadModelType.FIRERED).toLong() }
+    val combos = models.sumOf { g.size(it.usesFireRedFrontEnd).toLong() }
     val calls = combos * g.thresholds.size * devFiles
     Text(
         "$combos tổ hợp (${models.size} model) × ${g.thresholds.size} ngưỡng × $devFiles file dev = " +

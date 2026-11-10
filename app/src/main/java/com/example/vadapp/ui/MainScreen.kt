@@ -80,6 +80,7 @@ import com.example.vadapp.MainViewModel
 import com.example.vadapp.PlaybackState
 import com.example.vadapp.UiState
 import com.example.vadapp.vad.ModelSource
+import com.example.vadapp.vad.AedEvent
 import com.example.vadapp.vad.Segment
 import com.example.vadapp.vad.SegmentSettings
 import com.example.vadapp.vad.VadModelType
@@ -425,7 +426,57 @@ private fun androidx.compose.foundation.layout.ColumnScope.LazyColumnBody(
                 onSeek = { vm.seekTo(seg.startMs) },
             )
         }
+        ui.eventSegments.forEach { (event, segs) ->
+            item(key = "event-${event.name}") {
+                EventHeader(event, segs, ui.result?.durationSec ?: 0f, ui.eventThresholds[event] ?: event.defaultThreshold) {
+                    vm.setEventThreshold(event, it)
+                }
+            }
+            itemsIndexed(segs, key = { i, s -> "${event.name}-$i-${s.startSec}" }) { _, seg ->
+                EventRow(seg) { vm.seekTo(seg.startMs) }
+            }
+        }
     }
+}
+
+/** AED: summary of one event channel (singing / music) with its own threshold. */
+@Composable
+private fun EventHeader(
+    event: AedEvent, segments: List<Segment>, durationSec: Float, threshold: Float, onThreshold: (Float) -> Unit,
+) {
+    val total = segments.sumOf { it.durationSec.toDouble() }.toFloat()
+    val ratio = if (durationSec > 0f) total / durationSec else 0f
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp),
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Text(event.label, fontWeight = FontWeight.SemiBold)
+            Text(
+                String.format(Locale.US, "%d đoạn · %.1f s (%.0f%% thời lượng)", segments.size, total, ratio * 100),
+                style = MaterialTheme.typography.labelSmall,
+            )
+            LabeledSlider(
+                "Ngưỡng", String.format(Locale.US, "%.2f", threshold), threshold, 0f..1f,
+            ) { onThreshold((it * 100).roundToInt() / 100f) }
+        }
+    }
+}
+
+@Composable
+private fun EventRow(segment: Segment, onSeek: () -> Unit) {
+    Text(
+        "${formatTime(segment.startSec)} → ${formatTime(segment.endSec)}  " +
+            String.format(Locale.US, "%.2f s", segment.durationSec),
+        fontFamily = FontFamily.Monospace,
+        style = MaterialTheme.typography.bodySmall,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onSeek)
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+    )
 }
 
 @Composable
@@ -513,7 +564,7 @@ private fun SettingsPanel(
                 "Post padding", "${settings.postPadMs} ms",
                 settings.postPadMs.toFloat(), 0f..500f,
             ) { onChange(settings.copy(postPadMs = (it / 10).roundToInt() * 10)) }
-            if (model == VadModelType.FIRERED) {
+            if (model.usesFireRedFrontEnd) {
                 LabeledSlider(
                     "Làm mượt", "${settings.smoothWindowMs} ms",
                     settings.smoothWindowMs.toFloat(), 10f..300f,

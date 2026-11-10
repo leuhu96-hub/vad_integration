@@ -36,6 +36,7 @@ fun modelColor(model: VadModelType): Color = when (model) {
     VadModelType.FIRERED -> Color(0xFF2A6FDB)
     VadModelType.SILERO -> Color(0xFFE8710A)
     VadModelType.YAMNET -> Color(0xFF1E8E3E)
+    VadModelType.FIRERED_AED -> Color(0xFF8E24AA)
 }
 
 class RocSeries(

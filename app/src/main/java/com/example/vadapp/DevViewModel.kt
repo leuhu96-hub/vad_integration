@@ -309,7 +309,7 @@ class DevViewModel(app: Application) : AndroidViewModel(app) {
                 for ((mi, entry) in models.entries.withIndex()) {
                     val (m, conf) = entry
                     val src = conf.source!!
-                    val withSmooth = m == VadModelType.FIRERED
+                    val withSmooth = m.usesFireRedFrontEnd
                     val label = "Tìm tham số ${m.label} (${mi + 1}/${models.size}): ${s.grid.size(withSmooth)} tổ hợp × " +
                         "${s.grid.thresholds.size} ngưỡng"
                     progress(0f, label)

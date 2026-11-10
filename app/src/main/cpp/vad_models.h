@@ -13,6 +13,8 @@ namespace vad {
 // probs[i] describes audio centred at offset_s + i * hop_s.
 struct ProbTrack {
     std::vector<float> probs;
+    // Further channels with the same hop/offset and length as `probs` (AED: singing, music).
+    std::vector<std::vector<float>> extra;
     float hop_s = 0;
     float offset_s = 0;
 };
@@ -41,9 +43,12 @@ protected:
 
 // FireRedVAD non-streaming DFSMN: 80-dim fbank + CMVN -> per-10ms speech probability.
 // I/O: feat [1, T, 80] -> probs [1, T, 1].
+// The AED variant has the same graph with 3 outputs per frame, probs [1, T, 3] = (speech,
+// singing, music): channel 0 becomes track().probs, the rest track().extra.
 class FireRedVadModel : public VadModel {
 public:
-    FireRedVadModel(std::unique_ptr<InferenceSession> s, const std::vector<uint8_t>& cmvn);
+    FireRedVadModel(std::unique_ptr<InferenceSession> s, const std::vector<uint8_t>& cmvn,
+                    int num_outputs = 1);
     void Feed(const float* samples, size_t n) override;
     void Finish() override;
 
@@ -52,6 +57,7 @@ private:
     static constexpr int kChunkFrames = 30000;
     void RunFrames(int num_frames);
 
+    const int num_outputs_;
     Fbank fbank_;
     Cmvn cmvn_;
     std::vector<float> pending_;  // int16-scaled samples not yet consumed

@@ -6,12 +6,20 @@
 
 namespace vad {
 
+namespace {
+constexpr int kAedOutputs = 3;  // speech, singing, music
+}  // namespace
+
 std::unique_ptr<VadModel> VadModel::Create(ModelType type, std::vector<uint8_t> model,
                                            const std::vector<uint8_t>& extra, int num_threads) {
     switch (type) {
         case ModelType::kFireRedVad:
             if (extra.empty()) throw VadError("FireRedVAD needs cmvn.ark");
             return std::make_unique<FireRedVadModel>(CreateSession(std::move(model), num_threads), extra);
+        case ModelType::kFireRedAed:
+            if (extra.empty()) throw VadError("FireRedVAD AED needs cmvn.ark");
+            return std::make_unique<FireRedVadModel>(CreateSession(std::move(model), num_threads), extra,
+                                                     kAedOutputs);
         case ModelType::kSilero:
             // The model is tiny and strictly sequential: one thread is fastest.
             return std::make_unique<SileroVadModel>(CreateSession(std::move(model), 1));
@@ -75,11 +83,15 @@ Cmvn ParseKaldiCmvn(const void* data, size_t size) {
 
 // ---------------------------------------------------------------- FireRedVAD
 
-FireRedVadModel::FireRedVadModel(std::unique_ptr<InferenceSession> s, const std::vector<uint8_t>& cmvn)
-    : VadModel(std::move(s)), cmvn_(ParseKaldiCmvn(cmvn.data(), cmvn.size())) {
+FireRedVadModel::FireRedVadModel(std::unique_ptr<InferenceSession> s, const std::vector<uint8_t>& cmvn,
+                                 int num_outputs)
+    : VadModel(std::move(s)),
+      num_outputs_(std::max(1, num_outputs)),
+      cmvn_(ParseKaldiCmvn(cmvn.data(), cmvn.size())) {
     if (static_cast<int>(cmvn_.mean.size()) != Fbank::kNumBins) throw VadError("cmvn dim mismatch");
     track_.hop_s = 0.010f;
     track_.offset_s = 0.0125f;  // centre of the 25 ms analysis window
+    track_.extra.resize(num_outputs_ - 1);
 }
 
 void FireRedVadModel::Feed(const float* samples, size_t n) {
@@ -103,10 +115,21 @@ void FireRedVadModel::RunFrames(int num_frames) {
 
     auto out = session_->Run({{"feat", DType::kFloat32, {1, num_frames, Fbank::kNumBins}, feat_.data()}},
                              {"probs"});
-    // Some converters pad the time axis; keep exactly one probability per frame.
+    // probs is [1, T, num_outputs], row-major. Some converters pad the time axis; keep exactly
+    // one value per frame and channel.
     const auto& probs = out[0].data;
-    track_.probs.insert(track_.probs.end(), probs.begin(),
-                        probs.begin() + std::min<size_t>(probs.size(), num_frames));
+    if (probs.size() % num_outputs_ != 0) {
+        throw VadError("FireRedVAD: expected " + std::to_string(num_outputs_) + " outputs per frame");
+    }
+    const size_t frames = std::min<size_t>(probs.size() / num_outputs_, num_frames);
+    if (num_outputs_ == 1) {
+        track_.probs.insert(track_.probs.end(), probs.begin(), probs.begin() + frames);
+    } else {
+        for (size_t t = 0; t < frames; ++t) {
+            track_.probs.push_back(probs[t * num_outputs_]);
+            for (int c = 1; c < num_outputs_; ++c) track_.extra[c - 1].push_back(probs[t * num_outputs_ + c]);
+        }
+    }
 
     // The next chunk starts exactly where this chunk's next frame would have started.
     const size_t consumed = static_cast<size_t>(num_frames) * Fbank::kFrameShift;

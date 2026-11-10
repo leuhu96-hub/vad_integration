@@ -129,13 +129,19 @@ Java_com_example_vadapp_vad_NativeVad_analyze(JNIEnv* env, jobject /*thiz*/, job
         }
         jfloatArray env_arr = env->NewFloatArray(static_cast<jsize>(envelope.size()));
         env->SetFloatArrayRegion(env_arr, 0, static_cast<jsize>(envelope.size()), envelope.data());
+        // Extra channels (AED: singing, music) flattened one after another, each probs.size() long.
+        std::vector<float> extra_flat;
+        for (const auto& ch : track.extra) extra_flat.insert(extra_flat.end(), ch.begin(), ch.end());
+        jfloatArray extra_arr = env->NewFloatArray(static_cast<jsize>(extra_flat.size()));
+        env->SetFloatArrayRegion(extra_arr, 0, static_cast<jsize>(extra_flat.size()), extra_flat.data());
         jstring mime = env->NewStringUTF(info.mime.c_str());
         jclass result_cls = env->FindClass("com/example/vadapp/vad/AnalysisResult");
-        jmethodID ctor = env->GetMethodID(result_cls, "<init>", "([FFFFIILjava/lang/String;Ljava/lang/String;J[FF)V");
+        jmethodID ctor = env->GetMethodID(result_cls, "<init>",
+                                          "([FFFFIILjava/lang/String;Ljava/lang/String;J[FF[F)V");
         return env->NewObject(result_cls, ctor, probs, track.hop_s, track.offset_s, duration,
                               info.sample_rate, info.channels, mime, env->NewStringUTF(format),
                               static_cast<jlong>(elapsed_ms), env_arr,
-                              static_cast<float>(kEnvelopeBucket) / kTargetSampleRate);
+                              static_cast<float>(kEnvelopeBucket) / kTargetSampleRate, extra_arr);
     } catch (const Cancelled&) {
         ThrowJava(env, "java/util/concurrent/CancellationException", "Analysis cancelled");
     } catch (const std::exception& e) {

@@ -20,6 +20,9 @@ enum class ModelType : int {
     kFireRedVad = 0,
     kSilero = 1,
     kYamnet = 2,
+    // FireRedVAD AED: same front end as kFireRedVad, 3 outputs (speech, singing, music).
+    // The speech channel is the main probability track; the others are ProbTrack::extra.
+    kFireRedAed = 3,
 };
 
 struct VadError : std::runtime_error {

@@ -262,7 +262,8 @@ std::vector<Segment> MakeSegments(ModelType type, const ProbTrack& track,
                                   float duration_s, const SegmentParams& params) {
     std::vector<Segment> segs;
     switch (type) {
-        case ModelType::kFireRedVad: {
+        case ModelType::kFireRedVad:
+        case ModelType::kFireRedAed: {
             FireRedPostprocessor pp(std::max(1, params.smooth_window_ms / 10), params.threshold,
                                     std::max(1, params.min_speech_ms / 10),
                                     std::max(1, static_cast<int>(params.max_speech_s * 100)),
