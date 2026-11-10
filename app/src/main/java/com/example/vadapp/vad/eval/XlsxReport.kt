@@ -104,7 +104,7 @@ class XlsxReport(
         summaries.forEachIndexed { m, ms ->
             val e = ms.eval
             val st = e.settings
-            s.str(r, 0, "Model: ${e.model.label} — ${e.source.fileName} (${e.source.format.label}); " +
+            s.str(r, 0, "Model: ${e.label} — ${e.source.fileName} (${e.source.format.label}); " +
                 "merge ${st.minSilenceMs} ms, drop ${st.minSpeechMs} ms, pad ${st.prePadMs}/${st.postPadMs} ms" +
                 (if (e.model.usesFireRedFrontEnd) ", làm mượt ${st.smoothWindowMs} ms, speech tối đa ${st.maxSpeechSec} s" else "") +
                 (if (e.failed > 0) "; ${e.failed} file lỗi bị bỏ qua" else ""), Style.SECTION)
@@ -213,7 +213,7 @@ class XlsxReport(
             val row = r + 2 + m
             val sr = strictRowOf.getValue(m)
             val a0 = tableARowOf.getValue(m)
-            s.str(row, 0, ms.model.label)
+            s.str(row, 0, ms.label)
             s.str(row, 1, "${ms.eval.source.fileName} (${ms.eval.source.format.label})")
             s.formula(row, 2, pConfig)
             s.formula(row, 3, usedCellOf.getValue(m), Style.DEC2)
@@ -278,7 +278,7 @@ class XlsxReport(
                     for (k in 0 until NUM_THR) {
                         val r = r0 + k
                         val conf = Metrics.conf(sweep, c, k, md)
-                        s.str(r, 0, ms.model.label)
+                        s.str(r, 0, ms.label)
                         s.str(r, 1, configs[c].code)
                         s.str(r, 2, if (set == 0) "dev" else "test")
                         s.str(r, 3, EvalMode.entries[md].short)
@@ -372,7 +372,7 @@ class XlsxReport(
         s.width(0, 14.0)
         var r = 3
         for (ms in summaries) for (g in ms.groups) {
-            s.str(r, 0, ms.model.label)
+            s.str(r, 0, ms.label)
             s.str(r, 1, g.kind)
             s.str(r, 2, g.name)
             s.num(r, 3, g.files.toDouble(), Style.BLUE_INT)
@@ -419,7 +419,7 @@ class XlsxReport(
             res.ranked().forEachIndexed { rank, e ->
                 val st = e.settings
                 val c = e.conf[EvalMode.STRICT.ordinal]
-                s.str(r, 0, ms.model.label)
+                s.str(r, 0, ms.label)
                 s.str(r, 1, crit)
                 s.num(r, 2, rank + 1.0, Style.INT)
                 s.num(r, 3, st.minSilenceMs.toDouble(), Style.BLUE_INT)

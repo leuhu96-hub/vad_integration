@@ -11,6 +11,7 @@ import com.example.vadapp.ui.RocSeries
 import com.example.vadapp.ui.modelColor
 import com.example.vadapp.ui.renderRocBitmap
 import com.example.vadapp.ui.renderRocGridBitmap
+import com.example.vadapp.vad.AnalysisResult
 import com.example.vadapp.vad.ModelRegistry
 import com.example.vadapp.vad.ModelSource
 import com.example.vadapp.vad.NativeVad
@@ -31,6 +32,7 @@ import com.example.vadapp.vad.eval.SearchResult
 import com.example.vadapp.vad.eval.Criterion
 import com.example.vadapp.vad.eval.ProbCache
 import com.example.vadapp.vad.eval.ScanReport
+import com.example.vadapp.vad.eval.TreeFile
 import com.example.vadapp.vad.eval.SelectParams
 import com.example.vadapp.vad.eval.Split
 import com.example.vadapp.vad.eval.Splitter
@@ -58,6 +60,8 @@ data class DevModelConf(
     val enabled: Boolean,
     val source: ModelSource?,
     val settings: SegmentSettings,
+    /** AED only: the speech track is max(speech, singing), i.e. singing counts as speech. */
+    val singingAsSpeech: Boolean = false,
 )
 
 data class DevState(
@@ -111,7 +115,10 @@ class DevViewModel(app: Application) : AndroidViewModel(app) {
                 gtTree = prefs.getString("gtTree", null)?.let(Uri::parse),
                 sources = sources,
                 models = VadModelType.entries.associateWith { m ->
-                    DevModelConf(sources[m].orEmpty().isNotEmpty(), sources[m]?.firstOrNull(), user.load(m))
+                    DevModelConf(
+                        sources[m].orEmpty().isNotEmpty(), sources[m]?.firstOrNull(), user.load(m),
+                        m.hasEvents && prefs.getBoolean("singingAsSpeech.${m.name}", false),
+                    )
                 },
                 searchEnabled = prefs.getBoolean("searchEnabled", false),
                 testOnly = prefs.getBoolean("testOnly", false),
@@ -201,6 +208,17 @@ class DevViewModel(app: Application) : AndroidViewModel(app) {
             val fixed = if (st.testOnly) (st.models[e.model]?.settings?.threshold?.let { Math.round(it * 100) }) else null
             ModelSummary.compute(e, items, p, fixed?.coerceIn(0, NUM_THR - 1))
         }
+    }
+
+    fun setSingingAsSpeech(m: VadModelType, enabled: Boolean) {
+        prefs.edit().putBoolean("singingAsSpeech.${m.name}", enabled).apply()
+        updateModel(m) { copy(singingAsSpeech = enabled) }
+    }
+
+    /** Cached model output, with singing merged into speech when the option is on. */
+    private fun loadProbs(video: TreeFile, m: VadModelType, conf: DevModelConf): AnalysisResult? {
+        val r = cache.get(video, m, conf.source!!) ?: return null
+        return if (m.hasEvents && conf.singingAsSpeech) r.withSingingAsSpeech() else r
     }
 
     private fun updateModel(m: VadModelType, f: DevModelConf.() -> DevModelConf) {
@@ -317,7 +335,7 @@ class DevViewModel(app: Application) : AndroidViewModel(app) {
                     val job = coroutineContext[Job]
                     searches[m] = ParamSearch.search(
                         devFiles = devIdx.size,
-                        load = { f -> cache.get(items[devIdx[f]].video, m, src)?.let { it to items[devIdx[f]].gt } },
+                        load = { f -> loadProbs(items[devIdx[f]].video, m, conf)?.let { it to items[devIdx[f]].gt } },
                         segmenter = { r, st -> NativeVad.segments(m, r, st) },
                         grid = s.grid, ratio = s.binRatio,
                         criterion = params.criterion, missWeight = params.missWeight, mrMax = params.mrMax,
@@ -345,7 +363,7 @@ class DevViewModel(app: Application) : AndroidViewModel(app) {
                 val videos = coroutineScope {
                     items.map { item ->
                         async(Dispatchers.Default) {
-                            val r = cache.get(item.video, m, src) ?: return@async null
+                            val r = loadProbs(item.video, m, conf) ?: return@async null
                             val job = coroutineContext[Job]
                             Metrics.evaluateVideo(m, r, item.gt, conf.settings, tuned, s.binRatio) { job?.isActive != false }
                                 .also {
@@ -355,7 +373,7 @@ class DevViewModel(app: Application) : AndroidViewModel(app) {
                         }
                     }.awaitAll()
                 }
-                evals += ModelEval(m, src, conf.settings, tuned, search, s.binRatio, videos, devIdx, split.testIndices())
+                evals += ModelEval(m, src, conf.settings, tuned, search, s.binRatio, videos, devIdx, split.testIndices(), conf.singingAsSpeech)
             }
             // After a search, report the tuned configuration by default.
             if (searches.isNotEmpty()) _state.update { it.copy(params = it.params.copy(config = PostConfig.A5)) }
@@ -419,7 +437,7 @@ class DevViewModel(app: Application) : AndroidViewModel(app) {
                 if (x.far.isNaN() || x.recall.isNaN()) null else x.far to x.recall
             } else null
             RocSeries(
-                "${e.model.label} (${e.source.format.label}) AUC ${"%.3f".format(Locale.US, auc)}",
+                "${e.label} (${e.source.format.label}) AUC ${"%.3f".format(Locale.US, auc)}",
                 modelColor(e.model), Metrics.roc(sweep, c, mode.ordinal), marker,
             )
         }

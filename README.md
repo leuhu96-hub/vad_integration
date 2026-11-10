@@ -44,7 +44,7 @@ Chọn tham số tốt nhất cho user từ một bộ dữ liệu có ground tr
    mỗi dòng `start end speech|no-speech`, bin 0.5 s). Ghép video ↔ GT theo tên file.
 2. Chia dev/test theo tỷ lệ chọn: phân tầng quality × category, cân theo thời lượng, rồi hoán đổi
    file cho tỷ lệ speech hai tập gần nhau.
-3. Chạy các model (xác suất cache ở `filesDir/devcache`), quét ngưỡng 0.00…1.00 cho 5 cấu hình
+3. Chạy các model (xác suất cache ở `filesDir/devcache`); với FireRedVAD AED có công tắc "Tính singing là speech" (speech = max(speech, singing)) ở mục 3, quét ngưỡng 0.00…1.00 cho 5 cấu hình
    hậu xử lý cộng dồn: A0 điểm bin thô · A1 rescore + rebin · A2 + merge · A3 + drop · A4 + pad.
    Bin 0.5 s là speech khi phần speech ≥ tỷ lệ chọn (mặc định 20 %).
    Bật "Tìm bộ hậu xử lý tối ưu" để thử mọi tổ hợp merge × drop × pre pad × post pad × ngưỡng

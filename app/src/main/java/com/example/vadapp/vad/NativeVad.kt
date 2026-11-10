@@ -41,6 +41,20 @@ class AnalysisResult(
     val eventCount: Int get() = if (probs.isEmpty()) 0 else eventProbs.size / probs.size
 
     fun eventTrack(index: Int): FloatArray = eventProbs.copyOfRange(index * probs.size, (index + 1) * probs.size)
+
+    /**
+     * AED: a copy whose speech track is max(speech, singing), i.e. singing counts as speech.
+     * Returns this when there is no singing channel.
+     */
+    fun withSingingAsSpeech(): AnalysisResult {
+        if (eventCount < 1) return this
+        val singing = eventTrack(AedEvent.SINGING.ordinal)
+        val merged = FloatArray(probs.size) { maxOf(probs[it], singing[it]) }
+        return AnalysisResult(
+            merged, hopSec, offsetSec, durationSec, sourceSampleRate, sourceChannels, mime, format, elapsedMs,
+            envelope, envelopeHopSec, eventProbs,
+        )
+    }
 }
 
 data class Segment(val startSec: Float, val endSec: Float) {

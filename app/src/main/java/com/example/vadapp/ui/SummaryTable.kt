@@ -162,7 +162,7 @@ fun ModelComparisonTable(summaries: List<ModelSummary>, params: SelectParams) {
         rows = summaries.map { ms ->
             val t = ms.test[EvalMode.STRICT.ordinal]
             listOf(
-                "${ms.model.label} (${ms.eval.source.format.label})", ms.config.code, fmtThr(ms.usedK),
+                "${ms.label} (${ms.eval.source.format.label})", ms.config.code, fmtThr(ms.usedK),
                 fmt3(ms.rows[c].aucDev[0]), fmt3(ms.rows[c].aucTest[0]), fmt3(t.f1), fmtPct(t.mr), fmtPct(t.far),
                 fmt3(t.dcf(params.missWeight)), fmtPct(t.precision), fmtPct(t.recall), fmtPct(t.specificity),
             )

@@ -17,7 +17,7 @@ class ProbCache(root: File) {
 
     private fun file(video: TreeFile, model: VadModelType, source: ModelSource): File {
         val modelStamp = if (source.custom) File(source.path).let { "${it.length()}:${it.lastModified()}" } else ""
-        val key = "${video.uriString}|${video.size}|${video.lastModified}|${model.name}|${source.path}|$modelStamp"
+        val key = "v$VERSION|${video.uriString}|${video.size}|${video.lastModified}|${model.name}|${source.path}|$modelStamp"
         val hash = MessageDigest.getInstance("SHA-1").digest(key.toByteArray())
             .joinToString("") { "%02x".format(it) }
         return File(dir, "$hash.bin")
@@ -37,7 +37,8 @@ class ProbCache(root: File) {
                 val format = s.readUTF()
                 val n = s.readInt()
                 val probs = FloatArray(n) { s.readFloat() }
-                AnalysisResult(probs, hop, offset, duration, 0, 0, "", format, 0, FloatArray(0), 1f)
+                val events = FloatArray(s.readInt()) { s.readFloat() }
+                AnalysisResult(probs, hop, offset, duration, 0, 0, "", format, 0, FloatArray(0), 1f, events)
             }
         }.getOrNull()
     }
@@ -53,6 +54,8 @@ class ProbCache(root: File) {
             s.writeUTF(r.format)
             s.writeInt(r.probs.size)
             for (p in r.probs) s.writeFloat(p)
+            s.writeInt(r.eventProbs.size)
+            for (p in r.eventProbs) s.writeFloat(p)
         }
         tmp.renameTo(f)
     }
@@ -62,6 +65,6 @@ class ProbCache(root: File) {
     }
 
     private companion object {
-        const val VERSION = 1
+        const val VERSION = 2
     }
 }

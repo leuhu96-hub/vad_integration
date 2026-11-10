@@ -18,7 +18,12 @@ class ModelEval(
     val videos: List<VideoEval?>,
     val devIdx: List<Int>,
     val testIdx: List<Int>,
+    /** AED: singing counted as speech (speech track = max(speech, singing)). */
+    val singingAsSpeech: Boolean = false,
 ) {
+    /** Model name for tables and charts, marking the singing-as-speech variant. */
+    val label: String get() = model.label + if (singingAsSpeech) " (speech+singing)" else ""
+
     val devSweep: IntArray = Metrics.sum(devIdx.mapNotNull { videos[it] })
     val testSweep: IntArray = Metrics.sum(testIdx.mapNotNull { videos[it] })
     val exactAucDev = DoubleArray(EvalMode.entries.size) { Metrics.exactAuc(devIdx.mapNotNull { i -> videos[i] }, it) }
@@ -77,6 +82,7 @@ class ModelSummary(
     val groups: List<GroupRow>,
 ) {
     val model get() = eval.model
+    val label: String get() = eval.label
     val threshold: Float? get() = if (usedK >= 0) thresholdAt(usedK) else null
     /** Same threshold as a double without float rounding noise (for the workbook). */
     val thresholdExact: Double? get() = if (usedK >= 0) usedK / 100.0 else null

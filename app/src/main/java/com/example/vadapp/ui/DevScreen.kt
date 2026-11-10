@@ -310,6 +310,15 @@ private fun ModelsSection(st: DevState, vm: DevViewModel) = Section("3. Model & 
                         if (it != null) vm.setModelSource(m, it)
                     }
                 }
+                if (m.hasEvents) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Switch(checked = conf.singingAsSpeech, onCheckedChange = { vm.setSingingAsSpeech(m, it) })
+                        Text(
+                            "  Tính singing là speech: max(speech, singing)",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
                 val s = conf.settings
                 if (st.testOnly) {
                     SliderRow("Ngưỡng", String.format(Locale.US, "%.2f", s.threshold), s.threshold, 0f..1f, steps = 99) {
@@ -401,7 +410,7 @@ private fun RocSection(vm: DevViewModel, st: DevState) = Section("5. ROC · cấ
 @Composable
 private fun CompareSection(st: DevState) = Section("6. So sánh model") {
     val c = st.params.config.ordinal
-    val series = st.summaries.map { "${it.model.label}" to modelColor(it.model) }
+    val series = st.summaries.map { "${it.label}" to modelColor(it.model) }
     val sets = if (st.testOnly) listOf(1) else listOf(0, 1)
     Text("AUC theo chế độ (${if (st.testOnly) "test" else "dev · test"}), cấu hình ${st.params.config.code}",
         style = MaterialTheme.typography.labelLarge)
@@ -435,7 +444,7 @@ private fun CompareSection(st: DevState) = Section("6. So sánh model") {
 
 @Composable
 private fun SummarySection(ms: ModelSummary, st: DevState, onApply: (VadModelType, SegmentSettings) -> Unit) =
-    Section("7. ${ms.model.label} · ${ms.eval.source.fileName}") {
+    Section("7. ${ms.label} · ${ms.eval.source.fileName}") {
         if (ms.eval.failed > 0) Text("${ms.eval.failed} file không phân tích được (bỏ qua)",
             color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
         ModelSummaryTables(ms, st.params, st.testOnly)
@@ -530,7 +539,7 @@ private fun GridField(label: String, values: List<Int>, onChange: (List<Int>) ->
 @Composable
 private fun SearchSection(ms: ModelSummary, st: DevState, vm: DevViewModel) {
     val r = ms.eval.search ?: return
-    Section("Tìm tham số · ${ms.model.label}") {
+    Section("Tìm tham số · ${ms.label}") {
         val best = r.best
         val name = r.criterion.label + when (r.criterion) {
             Criterion.DCF_MIN -> " (w = ${r.missWeight})"
