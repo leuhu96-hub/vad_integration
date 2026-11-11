@@ -107,6 +107,7 @@ class XlsxReport(
             s.str(r, 0, "Model: ${e.label} — ${e.source.fileName} (${e.source.format.label}); " +
                 "merge ${st.minSilenceMs} ms, drop ${st.minSpeechMs} ms, pad ${st.prePadMs}/${st.postPadMs} ms" +
                 (if (e.model.usesFireRedFrontEnd) ", làm mượt ${st.smoothWindowMs} ms, speech tối đa ${st.maxSpeechSec} s" else "") +
+                (e.singingNote?.let { "; $it (hậu xử lý riêng từng nhãn rồi hợp đoạn)" } ?: "") +
                 (if (e.failed > 0) "; ${e.failed} file lỗi bị bỏ qua" else ""), Style.SECTION)
             val usedRow = r + 1
             val aFirst = r + 7

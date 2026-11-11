@@ -314,9 +314,17 @@ private fun ModelsSection(st: DevState, vm: DevViewModel) = Section("3. Model & 
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Switch(checked = conf.singingAsSpeech, onCheckedChange = { vm.setSingingAsSpeech(m, it) })
                         Text(
-                            "  Tính singing là speech: max(speech, singing)",
+                            "  Tính singing là speech (hậu xử lý riêng từng nhãn rồi hợp đoạn)",
                             style = MaterialTheme.typography.bodySmall,
                         )
+                    }
+                    if (conf.singingAsSpeech) {
+                        val r = conf.singingRatio
+                        val t = conf.settings.threshold
+                        SliderRow(
+                            "Ngưỡng singing = speech ×",
+                            String.format(Locale.US, "%.2f (%.2f → %.2f)", r, t, t * r), r, 0.5f..2f, steps = 29,
+                        ) { vm.setSingingRatio(m, (it * 20).roundToInt() / 20f) }
                     }
                 }
                 val s = conf.settings

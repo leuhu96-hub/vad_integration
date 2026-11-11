@@ -18,11 +18,17 @@ class ModelEval(
     val videos: List<VideoEval?>,
     val devIdx: List<Int>,
     val testIdx: List<Int>,
-    /** AED: singing counted as speech (speech track = max(speech, singing)). */
-    val singingAsSpeech: Boolean = false,
+    /**
+     * AED, singing counted as speech: singing threshold = speech threshold × this (labels are
+     * post-processed separately and united). Null = speech only.
+     */
+    val singingRatio: Float? = null,
 ) {
     /** Model name for tables and charts, marking the singing-as-speech variant. */
-    val label: String get() = model.label + if (singingAsSpeech) " (speech+singing)" else ""
+    val label: String get() = model.label + if (singingRatio != null) " (speech+singing)" else ""
+
+    /** Ratio as shown in reports, e.g. "singing = speech × 1.25". */
+    val singingNote: String? get() = singingRatio?.let { "singing = speech × ${"%.2f".format(java.util.Locale.US, it)}" }
 
     val devSweep: IntArray = Metrics.sum(devIdx.mapNotNull { videos[it] })
     val testSweep: IntArray = Metrics.sum(testIdx.mapNotNull { videos[it] })

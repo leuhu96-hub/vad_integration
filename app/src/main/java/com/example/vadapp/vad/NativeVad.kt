@@ -43,13 +43,16 @@ class AnalysisResult(
     fun eventTrack(index: Int): FloatArray = eventProbs.copyOfRange(index * probs.size, (index + 1) * probs.size)
 
     /**
-     * AED: a copy whose speech track is max(speech, singing), i.e. singing counts as speech.
-     * Returns this when there is no singing channel.
+     * AED, singing counted as speech: a copy whose speech track is max(speech, singing / [ratio]).
+     * A frame of it is >= t exactly when speech >= t or singing >= t·[ratio], so thresholding it
+     * is the frame-level OR of both labels with the singing threshold tied to the speech one.
+     * Only used for the raw bin score (A0); segments come from [NativeVad.speechSegments], which
+     * post-processes each label on its own like the reference AED. Returns this without singing.
      */
-    fun withSingingAsSpeech(): AnalysisResult {
+    fun withSingingAsSpeech(ratio: Float): AnalysisResult {
         if (eventCount < 1) return this
         val singing = eventTrack(AedEvent.SINGING.ordinal)
-        val merged = FloatArray(probs.size) { maxOf(probs[it], singing[it]) }
+        val merged = FloatArray(probs.size) { maxOf(probs[it], singing[it] / ratio) }
         return AnalysisResult(
             merged, hopSec, offsetSec, durationSec, sourceSampleRate, sourceChannels, mime, format, elapsedMs,
             envelope, envelopeHopSec, eventProbs,
@@ -61,6 +64,19 @@ data class Segment(val startSec: Float, val endSec: Float) {
     val durationSec get() = endSec - startSec
     val startMs get() = (startSec * 1000).toLong()
     val endMs get() = (endSec * 1000).toLong()
+}
+
+/** Union of two segment lists: sorted, overlapping or touching segments merged into one. */
+fun unionSegments(a: List<Segment>, b: List<Segment>): List<Segment> {
+    val all = (a + b).sortedBy { it.startSec }
+    val out = ArrayList<Segment>(all.size)
+    for (s in all) {
+        val last = out.lastOrNull()
+        if (last != null && s.startSec <= last.endSec) {
+            if (s.endSec > last.endSec) out[out.size - 1] = Segment(last.startSec, s.endSec)
+        } else out += s
+    }
+    return out
 }
 
 object NativeVad {
@@ -127,6 +143,26 @@ object NativeVad {
             settings.prePadMs, settings.postPadMs, settings.smoothWindowMs, settings.maxSpeechSec,
         )
         return List(flat.size / 2) { Segment(flat[2 * it], flat[2 * it + 1]) }
+    }
+
+    /**
+     * Speech segments used for evaluation. With [singingRatio] (AED, singing counted as speech)
+     * speech and singing are post-processed separately, as the reference AED does per label
+     * (same smoothing / min length / min silence / max length / padding, singing threshold =
+     * speech threshold × [singingRatio], above 1 = never), and their segments are united.
+     */
+    fun speechSegments(
+        model: VadModelType, result: AnalysisResult, settings: SegmentSettings, singingRatio: Float?,
+    ): List<Segment> {
+        val speech = segments(model, result, settings)
+        if (singingRatio == null || result.eventCount < 1) return speech
+        val flat = segment(
+            model.id, result.eventTrack(AedEvent.SINGING.ordinal), result.hopSec, result.offsetSec,
+            result.durationSec, settings.threshold * singingRatio,
+            settings.minSpeechMs, settings.minSilenceMs, settings.prePadMs, settings.postPadMs,
+            settings.smoothWindowMs, settings.maxSpeechSec,
+        )
+        return unionSegments(speech, List(flat.size / 2) { Segment(flat[2 * it], flat[2 * it + 1]) })
     }
 
     /**

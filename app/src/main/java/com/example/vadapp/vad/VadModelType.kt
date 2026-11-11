@@ -53,5 +53,10 @@ enum class VadModelType(
 /** Extra AED channels after speech, in output order. Thresholds follow the reference AED config. */
 enum class AedEvent(val label: String, val defaultThreshold: Float) {
     SINGING("Hát (singing)", 0.5f),
-    MUSIC("Nhạc (music)", 0.5f),
+    MUSIC("Nhạc (music)", 0.5f);
+
+    companion object {
+        /** Singing threshold / speech threshold of the reference AED config (0.5 / 0.4). */
+        val DEFAULT_SINGING_RATIO: Float = SINGING.defaultThreshold / VadModelType.FIRERED_AED.defaults.threshold
+    }
 }

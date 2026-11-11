@@ -11,6 +11,7 @@ import com.example.vadapp.ui.RocSeries
 import com.example.vadapp.ui.modelColor
 import com.example.vadapp.ui.renderRocBitmap
 import com.example.vadapp.ui.renderRocGridBitmap
+import com.example.vadapp.vad.AedEvent
 import com.example.vadapp.vad.AnalysisResult
 import com.example.vadapp.vad.ModelRegistry
 import com.example.vadapp.vad.ModelSource
@@ -60,9 +61,14 @@ data class DevModelConf(
     val enabled: Boolean,
     val source: ModelSource?,
     val settings: SegmentSettings,
-    /** AED only: the speech track is max(speech, singing), i.e. singing counts as speech. */
+    /** AED only: singing counts as speech (each label post-processed, segments united). */
     val singingAsSpeech: Boolean = false,
-)
+    /** Singing threshold = speech threshold × this (reference AED: 0.5 / 0.4). */
+    val singingRatio: Float = AedEvent.DEFAULT_SINGING_RATIO,
+) {
+    /** Ratio passed to the evaluation, or null when singing is not counted. */
+    fun singingRatioFor(m: VadModelType): Float? = if (m.hasEvents && singingAsSpeech) singingRatio else null
+}
 
 data class DevState(
     val videoTree: Uri? = null,
@@ -118,6 +124,7 @@ class DevViewModel(app: Application) : AndroidViewModel(app) {
                     DevModelConf(
                         sources[m].orEmpty().isNotEmpty(), sources[m]?.firstOrNull(), user.load(m),
                         m.hasEvents && prefs.getBoolean("singingAsSpeech.${m.name}", false),
+                        prefs.getFloat("singingRatio.${m.name}", AedEvent.DEFAULT_SINGING_RATIO),
                     )
                 },
                 searchEnabled = prefs.getBoolean("searchEnabled", false),
@@ -215,11 +222,14 @@ class DevViewModel(app: Application) : AndroidViewModel(app) {
         updateModel(m) { copy(singingAsSpeech = enabled) }
     }
 
-    /** Cached model output, with singing merged into speech when the option is on. */
-    private fun loadProbs(video: TreeFile, m: VadModelType, conf: DevModelConf): AnalysisResult? {
-        val r = cache.get(video, m, conf.source!!) ?: return null
-        return if (m.hasEvents && conf.singingAsSpeech) r.withSingingAsSpeech() else r
+    fun setSingingRatio(m: VadModelType, ratio: Float) {
+        prefs.edit().putFloat("singingRatio.${m.name}", ratio).apply()
+        updateModel(m) { copy(singingRatio = ratio) }
     }
+
+    /** Cached model output (all channels; singing is combined later, per label). */
+    private fun loadProbs(video: TreeFile, m: VadModelType, conf: DevModelConf): AnalysisResult? =
+        cache.get(video, m, conf.source!!)
 
     private fun updateModel(m: VadModelType, f: DevModelConf.() -> DevModelConf) {
         _state.update { s ->
@@ -336,7 +346,7 @@ class DevViewModel(app: Application) : AndroidViewModel(app) {
                     searches[m] = ParamSearch.search(
                         devFiles = devIdx.size,
                         load = { f -> loadProbs(items[devIdx[f]].video, m, conf)?.let { it to items[devIdx[f]].gt } },
-                        segmenter = { r, st -> NativeVad.segments(m, r, st) },
+                        segmenter = { r, st -> NativeVad.speechSegments(m, r, st, conf.singingRatioFor(m)) },
                         grid = s.grid, ratio = s.binRatio,
                         criterion = params.criterion, missWeight = params.missWeight, mrMax = params.mrMax,
                         farMax = params.farMax,
@@ -365,7 +375,10 @@ class DevViewModel(app: Application) : AndroidViewModel(app) {
                         async(Dispatchers.Default) {
                             val r = loadProbs(item.video, m, conf) ?: return@async null
                             val job = coroutineContext[Job]
-                            Metrics.evaluateVideo(m, r, item.gt, conf.settings, tuned, s.binRatio) { job?.isActive != false }
+                            Metrics.evaluateVideo(
+                                m, r, item.gt, conf.settings, tuned, s.binRatio, { job?.isActive != false },
+                                conf.singingRatioFor(m),
+                            )
                                 .also {
                                     val n = swept.incrementAndGet()
                                     progress(n.toFloat() / sweepTotal, "Quét ngưỡng ${m.label}: $n/$sweepTotal")
@@ -373,7 +386,7 @@ class DevViewModel(app: Application) : AndroidViewModel(app) {
                         }
                     }.awaitAll()
                 }
-                evals += ModelEval(m, src, conf.settings, tuned, search, s.binRatio, videos, devIdx, split.testIndices(), conf.singingAsSpeech)
+                evals += ModelEval(m, src, conf.settings, tuned, search, s.binRatio, videos, devIdx, split.testIndices(), conf.singingRatioFor(m))
             }
             // After a search, report the tuned configuration by default.
             if (searches.isNotEmpty()) _state.update { it.copy(params = it.params.copy(config = PostConfig.A5)) }

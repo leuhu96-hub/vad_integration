@@ -150,8 +150,12 @@ object Metrics {
     fun evaluateVideo(
         model: VadModelType, result: AnalysisResult, gt: GroundTruth,
         base: SegmentSettings, tuned: SegmentSettings, ratio: Float, keepGoing: () -> Boolean = { true },
-    ): VideoEval = evaluate(result, gt, ratio, keepGoing) { cfg, t ->
-        NativeVad.segments(model, result, cfg.settings(base, tuned, t))
+        /** AED: count singing as speech, singing threshold = speech threshold × this. */
+        singingRatio: Float? = null,
+    ): VideoEval = evaluate(
+        if (singingRatio == null) result else result.withSingingAsSpeech(singingRatio), gt, ratio, keepGoing,
+    ) { cfg, t ->
+        NativeVad.speechSegments(model, result, cfg.settings(base, tuned, t), singingRatio)
     }
 
     /** [segmenter] produces the speech segments of config A1..A5 at threshold t. */
